@@ -523,8 +523,7 @@ std::vector<paddle::Tensor> SplitRopeKVCacheKernel(
           const_cast<int32_t*>(
               decoder_batch_map.data<int32_t>())};  // real batch
 
-      auto q_buf =
-        paddle::empty({total_dec_len, hidden_dim}, qkv.type(), qkv.place());
+      xftblock::Tensor q_buf(q_dec.data(), KV_BUF_TYPE, {total_dec_len, hidden_dim});
 
       // rope + cache
       int ret = 0;

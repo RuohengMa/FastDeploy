@@ -39,6 +39,8 @@ from fastdeploy.model_executor.layers.attention.base_attention_backend import (
 )
 from fastdeploy.model_executor.layers.attention.utils import init_rank_and_device_id
 
+from fastdeploy.model_executor.ops.xpu import split_rope_kvcache, block_attn_decouple
+
 
 @dataclass
 class XPUAttentionMetadata(AttentionMetadata):
@@ -155,6 +157,132 @@ class XPUAttentionBackend(AttentionBackend):
         key_cache_shape = value_cache_shape = [max_num_blocks, self.kv_num_heads, self.block_size, self.head_dim]
         return key_cache_shape, value_cache_shape
 
+    def decouple_block_attn(
+        self,
+        qkv,
+        key_cache,
+        value_cache,
+        cum_offsets,
+        rotary_embs,
+        block_tables,
+        prefix_block_tables,
+        len_info_cpu,
+        encoder_seq_lod_cpu,
+        decoder_seq_lod_cpu,
+        encoder_kv_lod_cpu,
+        encoder_batch_map_cpu,
+        decoder_context_len_cpu,
+        decoder_context_len_cache_cpu,
+        decoder_batch_map_cpu,
+        prefix_len_cpu,
+        encoder_seq_lod,
+        decoder_seq_lod,
+        encoder_kv_lod,
+        encoder_batch_map,
+        decoder_context_len,
+        decoder_context_len_cache,
+        decoder_batch_map,
+        prefix_len,
+        k_scales,
+        v_scales,
+        k_scales_inv,
+        v_scales_inv,
+        k_zeros,
+        v_zeros,
+        shift,
+        smooth,
+        q_norm_weight,
+        k_norm_weight,
+        kv_signal_data_cpu,
+        cachekv_signal_thread_cpu,
+        use_neox_rotary_style,
+        rope_3d):
+        
+        q_enc, k_enc, v_enc, q_dec, k_dec, v_dec = split_rope_kvcache(
+            qkv,
+            key_cache,
+            value_cache,
+            cum_offsets,
+            rotary_embs,
+            block_tables,
+            prefix_block_tables,
+            len_info_cpu,
+            encoder_seq_lod_cpu,
+            decoder_seq_lod_cpu,
+            encoder_kv_lod_cpu,
+            encoder_batch_map_cpu,
+            decoder_context_len_cpu,
+            decoder_context_len_cache_cpu,
+            decoder_batch_map_cpu,
+            prefix_len_cpu,
+            encoder_seq_lod,
+            decoder_seq_lod,
+            encoder_kv_lod,
+            encoder_batch_map,
+            decoder_context_len,
+            decoder_context_len_cache,
+            decoder_batch_map,
+            prefix_len,
+            k_scales,
+            v_scales,
+            k_scales_inv,
+            v_scales_inv,
+            k_zeros,
+            v_zeros,
+            shift,
+            smooth,
+            q_norm_weight,
+            k_norm_weight,
+            kv_signal_data_cpu,
+            cachekv_signal_thread_cpu,
+            use_neox_rotary_style,
+            rope_3d)
+        out = block_attn_decouple(
+            q_enc,
+            k_enc,
+            v_enc,
+            q_dec,
+            k_dec,
+            v_dec,
+            key_cache,
+            value_cache,
+            cum_offsets,
+            rotary_embs,
+            block_tables,
+            prefix_block_tables,
+            len_info_cpu,
+            encoder_seq_lod_cpu,
+            decoder_seq_lod_cpu,
+            encoder_kv_lod_cpu,
+            encoder_batch_map_cpu,
+            decoder_context_len_cpu,
+            decoder_context_len_cache_cpu,
+            decoder_batch_map_cpu,
+            prefix_len_cpu,
+            encoder_seq_lod,
+            decoder_seq_lod,
+            encoder_kv_lod,
+            encoder_batch_map,
+            decoder_context_len,
+            decoder_context_len_cache,
+            decoder_batch_map,
+            prefix_len,
+            k_scales,
+            v_scales,
+            k_scales_inv,
+            v_scales_inv,
+            k_zeros,
+            v_zeros,
+            shift,
+            smooth,
+            q_norm_weight,
+            k_norm_weight,
+            kv_signal_data_cpu,
+            cachekv_signal_thread_cpu,
+            use_neox_rotary_style,
+            rope_3d)
+        return out
+
     def forward_mixed(
         self,
         q: paddle.Tensor,
@@ -186,7 +314,7 @@ class XPUAttentionBackend(AttentionBackend):
         q_norm_weight = getattr(layer, "q_norm_weight", None)
         k_norm_weight = getattr(layer, "k_norm_weight", None)
 
-        res = block_attn(
+        res = self.decouple_block_attn(
             qkv,
             forward_meta.caches[2 * layer.layer_id],
             forward_meta.caches[2 * layer.layer_id + 1],
@@ -226,5 +354,48 @@ class XPUAttentionBackend(AttentionBackend):
             layer.use_neox_rotary_style,
             self.rope_3d,
         )
-
+        
         return res
+        
+        # res = block_attn(
+        #     qkv,
+        #     forward_meta.caches[2 * layer.layer_id],
+        #     forward_meta.caches[2 * layer.layer_id + 1],
+        #     forward_meta.cum_offsets,
+        #     metadata.rotary_embs,
+        #     metadata.block_tables,
+        #     forward_meta.prefix_block_tables,
+        #     forward_meta.len_info_cpu,
+        #     forward_meta.encoder_seq_lod_cpu,
+        #     forward_meta.decoder_seq_lod_cpu,
+        #     forward_meta.encoder_kv_lod_cpu,
+        #     forward_meta.encoder_batch_map_cpu,
+        #     forward_meta.decoder_context_len_cpu,
+        #     forward_meta.decoder_context_len_cache_cpu,
+        #     forward_meta.decoder_batch_map_cpu,
+        #     forward_meta.prefix_len_cpu,
+        #     forward_meta.encoder_seq_lod,
+        #     forward_meta.decoder_seq_lod,
+        #     forward_meta.encoder_kv_lod,
+        #     forward_meta.encoder_batch_map,
+        #     forward_meta.decoder_context_len,
+        #     forward_meta.decoder_context_len_cache,
+        #     forward_meta.decoder_batch_map,
+        #     forward_meta.prefix_len,
+        #     cache_k_scale,
+        #     cache_v_scale,
+        #     cache_k_out_scale,
+        #     cache_v_out_scale,
+        #     cache_k_zp,
+        #     cache_v_zp,
+        #     None,  # shift
+        #     None,  # smooth
+        #     q_norm_weight,
+        #     k_norm_weight,
+        #     metadata.kv_signal_data_list[layer.layer_id],
+        #     forward_meta.kv_signal_sender,
+        #     layer.use_neox_rotary_style,
+        #     self.rope_3d,
+        # )
+
+        # return res
