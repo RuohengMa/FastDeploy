@@ -55,7 +55,7 @@ struct SplitRopeTypeTrait<int8_t, bfloat16> {
 };
 
 /**
- * qkv shape: [token_num, (num_heads + 2 * kv_num_heads) * head_dim]
+ * q shape: [token_num, (num_heads + 2 * kv_num_heads) * head_dim]
  * k_scales/v_scales value: 127 / max (type = TS)
  * k_scales_inv/v_scales_inv value:
  *   1. perchannel with zp: max / 127 (type = TS)
@@ -63,9 +63,12 @@ struct SplitRopeTypeTrait<int8_t, bfloat16> {
  **/
 template <typename TX, typename TC, typename TS>
 std::vector<paddle::Tensor> BlockAttnDecoupleKernel(
-    const paddle::Tensor& q,
-    const paddle::Tensor& k,
-    const paddle::Tensor& v,
+    const paddle::Tensor& q_enc,
+    const paddle::Tensor& k_enc,
+    const paddle::Tensor& v_enc,
+    const paddle::Tensor& q_dec,
+    const paddle::Tensor& k_dec,
+    const paddle::Tensor& v_dec,
     const paddle::Tensor& key_cache,
     const paddle::Tensor& value_cache,
     const paddle::Tensor& cum_offsets,
@@ -121,7 +124,6 @@ std::vector<paddle::Tensor> BlockAttnDecoupleKernel(
   xftblock::DataType KV_BUF_TYPE = std::is_same<bfloat16, XPU_XType>::value
                                        ? xftblock::DataType::DT_BFLOAT16
                                        : xftblock::DataType::DT_FLOAT16;
-  auto qkv_shape = qkv.dims();
   auto cache_shape = key_cache.dims();
   auto block_table_shape = block_tables.dims();
   const int bsz = cum_offsets.dims()[0];
@@ -132,10 +134,10 @@ std::vector<paddle::Tensor> BlockAttnDecoupleKernel(
   const int head_dim = cache_shape[3];
   const int max_seq_len = block_size * max_block_per_seq;
 
-  const int token_num = qkv_shape[0];
-  const int total_num_head = qkv_shape[qkv_shape.size() - 1] / head_dim;
-  const int num_heads = total_num_head - 2 * kv_num_heads;
-  const int hidden_dim = num_heads * head_dim;
+  const int token_num = q_enc.dims()[0] + q_dec.dims()[0];
+  const int hidden_dim = q_enc.dims()[q_enc.dims().size() - 1];
+  const int num_heads = hidden_dim / head_dim;
+  const int total_num_head = num_heads + 2 * kv_num_heads;
 
   int enc_batch = len_info_cpu.data<int32_t>()[0];
   int dec_batch = len_info_cpu.data<int32_t>()[1];
@@ -168,7 +170,7 @@ std::vector<paddle::Tensor> BlockAttnDecoupleKernel(
   }
 
   auto block_attn_out =
-      paddle::empty({token_num, hidden_dim}, q.type(), q.place());
+      paddle::empty({token_num, hidden_dim}, q_enc.type(), q_enc.place());
 
   // TODO(lizanz03): only support c8 zp per channel
   bool is_cache_int8 = std::is_same<int8_t, XPU_CType>::value;
@@ -250,10 +252,6 @@ std::vector<paddle::Tensor> BlockAttnDecoupleKernel(
         xftblock::DataType::DT_INT32,
         {prefix_block_tables.dims()[0], prefix_block_num_per_seq});
     param.page_attn.block_table = &prefix_block_tables_tensor;
-    baidu::xpu::api::VectorParam<int32_t> prefix_lens_vp{
-        const_cast<int32_t*>(prefix_len_cpu.data<int32_t>()),
-        enc_batch,
-        const_cast<int32_t*>(prefix_len.data<int32_t>())};
 
     float* fake_perhead_scale = nullptr;
     if (is_cache_int8 && has_zp && is_prefix_cache) {
@@ -265,9 +263,9 @@ std::vector<paddle::Tensor> BlockAttnDecoupleKernel(
     }
 
     // buf tensor
-    xftblock::Tensor q_buf(q.data(), KV_BUF_TYPE, {total_enc_len, hidden_dim});
-    xftblock::Tensor k_buf(k.data(), KV_BUF_TYPE, {total_enc_len, kv_num_heads * head_dim});
-    xftblock::Tensor v_buf(v.data(), KV_BUF_TYPE, {total_enc_len, kv_num_heads * head_dim});
+    xftblock::Tensor q_buf(const_cast<void*>(q_enc.data()), KV_BUF_TYPE, {total_enc_len, hidden_dim});
+    xftblock::Tensor k_buf(const_cast<void*>(k_enc.data()), KV_BUF_TYPE, {total_enc_len, kv_num_heads * head_dim});
+    xftblock::Tensor v_buf(const_cast<void*>(v_enc.data()), KV_BUF_TYPE, {total_enc_len, kv_num_heads * head_dim});
 
     // kv cache tensor
     xftblock::Tensor key_cache_tensor(
@@ -387,9 +385,9 @@ std::vector<paddle::Tensor> BlockAttnDecoupleKernel(
       int q_len = Eq_len ? total_dec_len / dec_batch : 1;
       
       // buf tensor
-      xftblock::Tensor q_buf(q.data(), KV_BUF_TYPE, {total_dec_len, hidden_dim});
-      xftblock::Tensor k_buf(k.data(), KV_BUF_TYPE, {total_dec_len, kv_num_heads * head_dim});
-      xftblock::Tensor v_buf(v.data(), KV_BUF_TYPE, {total_dec_len, kv_num_heads * head_dim});
+      xftblock::Tensor q_buf(const_cast<void*>(q_dec.data()), KV_BUF_TYPE, {total_dec_len, hidden_dim});
+      xftblock::Tensor k_buf(const_cast<void*>(k_dec.data()), KV_BUF_TYPE, {total_dec_len, kv_num_heads * head_dim});
+      xftblock::Tensor v_buf(const_cast<void*>(v_dec.data()), KV_BUF_TYPE, {total_dec_len, kv_num_heads * head_dim});
 
       api::VectorParam<int32_t> decoder_context_len_vp = {
           const_cast<int32_t*>(decoder_context_len_cpu.data<int32_t>()),
@@ -418,6 +416,30 @@ std::vector<paddle::Tensor> BlockAttnDecoupleKernel(
                   .data<int32_t>())};  // use for split rope enc as lod in MTP
 
       int ret = 0;
+
+      float* fake_perhead_scale = nullptr;
+      if (is_cache_int8 && has_zp) {
+        int64_t q_head_num = param.head_num;
+        int64_t kv_head_num = param.kv_head_num;
+        fake_perhead_scale = RAII_GUARD.alloc<float>(kv_head_num);
+        // q = q * k_scales_inv
+        ret =
+            api::broadcast_mul<XPU_XType>(xpu_ctx->x_context(),
+                                          q_buf.data<XPU_XType>(),
+                                          quant_k_scale_inv_zp,
+                                          q_buf.data<XPU_XType>(),
+                                          {total_dec_len,
+                                           kv_head_num,
+                                           q_head_num / kv_head_num,
+                                           param.head_dim},
+                                          {1, kv_head_num, 1, param.head_dim});
+        PD_CHECK(ret == api::SUCCESS, "api::broadcast_mul failed.");
+        // set fake_perhead_scale to ones
+        ret = api::constant<float>(
+            xpu_ctx->x_context(), fake_perhead_scale, kv_head_num, 127.f);
+        PD_CHECK(ret == api::SUCCESS, "api::constant failed.");
+      }
+
       XPU_XType* q_buf_ptr = q_buf.data<XPU_XType>();
       XPU_XType* decode_output_ptr = decode_output.data<XPU_XType>();
       const int* decoder_context_len_ptr =
@@ -521,7 +543,7 @@ std::vector<paddle::Tensor> BlockAttnDecoupleKernel(
           const_cast<int32_t*>(
               decoder_batch_map.data<int32_t>())};  // real batch
 
-      xftblock::Tensor q_buf(q.data(), KV_BUF_TYPE, {total_dec_len, hidden_dim});
+      xftblock::Tensor q_buf(const_cast<void*>(q_dec.data()), KV_BUF_TYPE, {total_dec_len, hidden_dim});
       xftblock::Tensor block_table_tensor(
           reinterpret_cast<void*>(
               const_cast<int32_t*>(block_tables.data<int32_t>())),
@@ -538,6 +560,29 @@ std::vector<paddle::Tensor> BlockAttnDecoupleKernel(
       param.page_attn.block_table = &block_table_tensor;
 
       int ret = 0;
+
+      float* fake_perhead_scale = nullptr;
+      if (is_cache_int8 && has_zp) {
+        int64_t q_head_num = param.head_num;
+        int64_t kv_head_num = param.kv_head_num;
+        fake_perhead_scale = RAII_GUARD.alloc<float>(kv_head_num);
+        // q = q * k_scales_inv
+        ret =
+            api::broadcast_mul<XPU_XType>(xpu_ctx->x_context(),
+                                          q_buf.data<XPU_XType>(),
+                                          quant_k_scale_inv_zp,
+                                          q_buf.data<XPU_XType>(),
+                                          {total_dec_len,
+                                           kv_head_num,
+                                           q_head_num / kv_head_num,
+                                           param.head_dim},
+                                          {1, kv_head_num, 1, param.head_dim});
+        PD_CHECK(ret == api::SUCCESS, "api::broadcast_mul failed.");
+        // set fake_perhead_scale to ones
+        ret = api::constant<float>(
+            xpu_ctx->x_context(), fake_perhead_scale, kv_head_num, 127.f);
+        PD_CHECK(ret == api::SUCCESS, "api::constant failed.");
+      }
       // kv cache tensor
       xftblock::Tensor key_cache_tensor(
           reinterpret_cast<void*>(
@@ -631,7 +676,12 @@ std::vector<paddle::Tensor> BlockAttnDecoupleKernel(
 }
 
 std::vector<paddle::Tensor> BlockAttnDecouple(
-    const paddle::Tensor& qkv,
+    const paddle::Tensor& q_enc,
+    const paddle::Tensor& k_enc,
+    const paddle::Tensor& v_enc,
+    const paddle::Tensor& q_dec,
+    const paddle::Tensor& k_dec,
+    const paddle::Tensor& v_dec,
     const paddle::Tensor& key_cache,
     const paddle::Tensor& value_cache,
     const paddle::Tensor& cum_offsets,
@@ -670,7 +720,7 @@ std::vector<paddle::Tensor> BlockAttnDecouple(
     const bool use_neox_rotary_style,
     const bool rope_3d = false) {
 #define APPLY_KERNEL(TX, TC, TS)                                    \
-  return BlockAttnDecoupleKernel<TX, TC, TS>(qkv,                           \
+  return BlockAttnDecoupleKernel<TX, TC, TS>(q_enc, k_enc, v_enc, q_dec, k_dec, v_dec,                           \
                                      key_cache,                     \
                                      value_cache,                   \
                                      cum_offsets,                   \
@@ -724,31 +774,34 @@ std::vector<paddle::Tensor> BlockAttnDecouple(
 }
 
 std::vector<std::vector<int64_t>> BlockAttnDecoupleInferShape(
-    const std::vector<int64_t>& qkv_shape,
+    const std::vector<int64_t>& q_shape,
     const std::vector<int64_t>& key_cache_shape,
     const std::vector<int64_t>& value_cache_shape) {
-  const int token_num = qkv_shape[0];
+  const int token_num = q_shape[0];
   const int kv_num_heads = key_cache_shape[1];
   int head_dim = key_cache_shape[3];
   //   if (cache_quant_type_str == "cache_int4_zp") {
   //     head_dim *= 2;
   //   }
-  const int total_num_head = qkv_shape[qkv_shape.size() - 1] / head_dim;
+  const int total_num_head = q_shape[q_shape.size() - 1] / head_dim;
   const int num_heads = total_num_head - 2 * kv_num_heads;
   return {{token_num, num_heads * head_dim}};
 }
 
 std::vector<paddle::DataType> BlockAttnDecoupleInferDtype(
-    const paddle::DataType& qkv_dtype,
+    const paddle::DataType& q_dtype,
     const paddle::DataType& key_cache_dtype,
     const paddle::DataType& value_cache_dtype) {
-  return {qkv_dtype};
+  return {q_dtype};
 }
 
 PD_BUILD_STATIC_OP(block_attn_decouple)
-    .Inputs({"q",
-             "k",
-             "v",
+    .Inputs({"q_enc",
+             "k_enc",
+             "v_enc",
+             "q_dec",
+             "k_dec",
+             "v_dec",
              "key_cache",
              "value_cache",
              "cum_offsets",

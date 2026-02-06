@@ -617,6 +617,9 @@ class XPUWeightOnlyMoEMethod(XPUMoEMethod):
         up_gate_proj_weights, down_proj_weights, _, _ = layer.extract_moe_ffn_weights(state_dict)
         assert len(up_gate_proj_weights) == layer.num_local_experts
         assert len(down_proj_weights) == layer.num_local_experts
+        logger.info(f"mark_debug: up_gate_proj_weights[0].shape: {up_gate_proj_weights[0].shape}")
+        logger.info(f"mark_debug: layer.hidden_size: {layer.hidden_size}")
+        logger.info(f"mark_debug: layer.moe_intermediate_size * 2: {layer.moe_intermediate_size * 2}")
         assert up_gate_proj_weights[0].shape == [
             layer.hidden_size,
             layer.moe_intermediate_size * 2,

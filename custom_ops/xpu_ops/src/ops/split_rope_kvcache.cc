@@ -215,6 +215,12 @@ std::vector<paddle::Tensor> SplitRopeKVCacheKernel(
            "split_neox_cache_kv_encoder not support q/k norm weight");
 
   int ret = 0;
+  auto q_enc =
+      paddle::empty({total_enc_len, hidden_dim}, qkv.type(), qkv.place());
+  auto k_enc =
+      paddle::empty({total_enc_len, kv_num_heads * head_dim}, qkv.type(), qkv.place());
+  auto v_enc =
+      paddle::empty({total_enc_len, kv_num_heads * head_dim}, qkv.type(), qkv.place());
   if (enc_batch > 0) {
     xftblock::TransformerParam param;
     xftblock::TransformerVsl vsl;
@@ -232,17 +238,16 @@ std::vector<paddle::Tensor> SplitRopeKVCacheKernel(
         const_cast<int32_t*>(encoder_batch_map_cpu.data<int32_t>()),
         enc_batch,
         const_cast<int32_t*>(encoder_batch_map.data<int32_t>())};  // real batch
+        
+    baidu::xpu::api::VectorParam<int32_t> prefix_lens_vp{
+        const_cast<int32_t*>(prefix_len_cpu.data<int32_t>()),
+        enc_batch,
+        const_cast<int32_t*>(prefix_len.data<int32_t>())};
 
-    auto q =
-        paddle::empty({total_enc_len, hidden_dim}, qkv.type(), qkv.place());
-    auto k =
-        paddle::empty({total_enc_len, kv_num_heads * head_dim}, qkv.type(), qkv.place());
-    auto v =
-        paddle::empty({total_enc_len, kv_num_heads * head_dim}, qkv.type(), qkv.place());
     // buf tensor
-    xftblock::Tensor q_buf(q.data(), KV_BUF_TYPE, {total_enc_len, hidden_dim});
-    xftblock::Tensor k_buf(k.data(), KV_BUF_TYPE, {total_enc_len, kv_num_heads * head_dim});
-    xftblock::Tensor v_buf(v.data(), KV_BUF_TYPE, {total_enc_len, kv_num_heads * head_dim});
+    xftblock::Tensor q_buf(q_enc.data(), KV_BUF_TYPE, {total_enc_len, hidden_dim});
+    xftblock::Tensor k_buf(k_enc.data(), KV_BUF_TYPE, {total_enc_len, kv_num_heads * head_dim});
+    xftblock::Tensor v_buf(v_enc.data(), KV_BUF_TYPE, {total_enc_len, kv_num_heads * head_dim});
 
     // rope + cache
     int ret = 0;
@@ -363,6 +368,7 @@ std::vector<paddle::Tensor> SplitRopeKVCacheKernel(
 
     // decouple comment
     // 放在这里还是block_attn里？
+    bool is_prefix_cache = prefix_block_num_per_seq > 0;
     if (is_cache_int8 && has_zp && is_prefix_cache) {
       int64_t q_head_num = param.head_num;
       int64_t kv_head_num = param.kv_head_num;
@@ -380,6 +386,12 @@ std::vector<paddle::Tensor> SplitRopeKVCacheKernel(
     }
   }
 
+  auto q_dec =
+      paddle::empty({total_dec_len, hidden_dim}, qkv.type(), qkv.place());
+  auto k_dec =
+      paddle::empty({total_dec_len, kv_num_heads * head_dim}, qkv.type(), qkv.place());
+  auto v_dec =
+      paddle::empty({total_dec_len, kv_num_heads * head_dim}, qkv.type(), qkv.place());
   if (dec_batch > 0) {
     xftblock::TransformerParam param;
     xftblock::TransformerVsl vsl;
@@ -391,9 +403,9 @@ std::vector<paddle::Tensor> SplitRopeKVCacheKernel(
     
     if (total_dec_len != dec_batch) {
       // buf tensor
-      xftblock::Tensor q_buf(q.data(), KV_BUF_TYPE, {total_dec_len, hidden_dim});
-      xftblock::Tensor k_buf(k.data(), KV_BUF_TYPE, {total_dec_len, kv_num_heads * head_dim});
-      xftblock::Tensor v_buf(v.data(), KV_BUF_TYPE, {total_dec_len, kv_num_heads * head_dim});
+      xftblock::Tensor q_buf(q_dec.data(), KV_BUF_TYPE, {total_dec_len, hidden_dim});
+      xftblock::Tensor k_buf(k_dec.data(), KV_BUF_TYPE, {total_dec_len, kv_num_heads * head_dim});
+      xftblock::Tensor v_buf(v_dec.data(), KV_BUF_TYPE, {total_dec_len, kv_num_heads * head_dim});
 
       api::VectorParam<int32_t> decoder_context_len_cache_vp = {
           const_cast<int32_t*>(decoder_context_len_cache_cpu.data<int32_t>()),
@@ -500,31 +512,6 @@ std::vector<paddle::Tensor> SplitRopeKVCacheKernel(
             rope_3d);
         PD_CHECK(ret == api::SUCCESS, "split_rope_cache_kv_encoder failed.");
       }
-
-      // decouple comment
-      // 放在这里还是block_attn里？
-      float* fake_perhead_scale = nullptr;
-      if (is_cache_int8 && has_zp) {
-        int64_t q_head_num = param.head_num;
-        int64_t kv_head_num = param.kv_head_num;
-        fake_perhead_scale = RAII_GUARD.alloc<float>(kv_head_num);
-        // q = q * k_scales_inv
-        ret =
-            api::broadcast_mul<XPU_XType>(xpu_ctx->x_context(),
-                                          q_buf.data<XPU_XType>(),
-                                          quant_k_scale_inv_zp,
-                                          q_buf.data<XPU_XType>(),
-                                          {total_dec_len,
-                                           kv_head_num,
-                                           q_head_num / kv_head_num,
-                                           param.head_dim},
-                                          {1, kv_head_num, 1, param.head_dim});
-        PD_CHECK(ret == api::SUCCESS, "api::broadcast_mul failed.");
-        // set fake_perhead_scale to ones
-        ret = api::constant<float>(
-            xpu_ctx->x_context(), fake_perhead_scale, kv_head_num, 127.f);
-        PD_CHECK(ret == api::SUCCESS, "api::constant failed.");
-      }
     } else {
       vsl.usual_lod_vp = {
           const_cast<int32_t*>(decoder_context_len_cpu.data<int32_t>()),
@@ -625,35 +612,10 @@ std::vector<paddle::Tensor> SplitRopeKVCacheKernel(
             rope_3d);
         PD_CHECK(ret == api::SUCCESS, "split_rope_cache_kv_decoder failed.");
       }
-
-      // decouple comment
-      // 放在这里还是block_attn里？
-      float* fake_perhead_scale = nullptr;
-      if (is_cache_int8 && has_zp) {
-        int64_t q_head_num = param.head_num;
-        int64_t kv_head_num = param.kv_head_num;
-        fake_perhead_scale = RAII_GUARD.alloc<float>(kv_head_num);
-        // q = q * k_scales_inv
-        ret =
-            api::broadcast_mul<XPU_XType>(xpu_ctx->x_context(),
-                                          q_buf.data<XPU_XType>(),
-                                          quant_k_scale_inv_zp,
-                                          q_buf.data<XPU_XType>(),
-                                          {total_dec_len,
-                                           kv_head_num,
-                                           q_head_num / kv_head_num,
-                                           param.head_dim},
-                                          {1, kv_head_num, 1, param.head_dim});
-        PD_CHECK(ret == api::SUCCESS, "api::broadcast_mul failed.");
-        // set fake_perhead_scale to ones
-        ret = api::constant<float>(
-            xpu_ctx->x_context(), fake_perhead_scale, kv_head_num, 127.f);
-        PD_CHECK(ret == api::SUCCESS, "api::constant failed.");
-      }
     }
   }
 
-  return {q, k, v};
+  return {q_enc, k_enc, v_enc, q_dec, k_dec, v_dec};
 }
 
 std::vector<paddle::Tensor> SplitRopeKVCache(
@@ -790,5 +752,5 @@ PD_BUILD_STATIC_OP(split_rope_kvcache)
              paddle::Optional("kv_signal_data_cpu"),
              paddle::Optional("cachekv_signal_thread_cpu")})
     .Attrs({"use_neox_rotary_style:bool", "rope_3d:bool"})
-    .Outputs({"q", "k", "v"})
+    .Outputs({"q_enc", "k_enc", "v_enc", "q_dec", "k_dec", "v_dec"})
     .SetKernelFn(PD_KERNEL(SplitRopeKVCache));
