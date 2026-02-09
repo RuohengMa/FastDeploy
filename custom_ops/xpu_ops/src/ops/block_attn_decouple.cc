@@ -71,8 +71,6 @@ std::vector<paddle::Tensor> BlockAttnDecoupleKernel(
     const paddle::Tensor& v_dec,
     const paddle::Tensor& key_cache,
     const paddle::Tensor& value_cache,
-    const paddle::Tensor& cum_offsets,
-    const paddle::Tensor& rotary_embs,
     const paddle::Tensor& block_tables,
     const paddle::Tensor& prefix_block_tables,
     const paddle::Tensor& len_info_cpu,
@@ -83,7 +81,6 @@ std::vector<paddle::Tensor> BlockAttnDecoupleKernel(
     const paddle::Tensor& decoder_context_len_cpu,
     const paddle::Tensor& decoder_context_len_cache_cpu,
     const paddle::Tensor& decoder_batch_map_cpu,
-    const paddle::Tensor& prefix_len_cpu,
     const paddle::Tensor& encoder_seq_lod,
     const paddle::Tensor& decoder_seq_lod,
     const paddle::Tensor& encoder_kv_lod,
@@ -91,7 +88,6 @@ std::vector<paddle::Tensor> BlockAttnDecoupleKernel(
     const paddle::Tensor& decoder_context_len,
     const paddle::Tensor& decoder_context_len_cache,
     const paddle::Tensor& decoder_batch_map,
-    const paddle::Tensor& prefix_len,
     const paddle::optional<paddle::Tensor>& k_scales,
     const paddle::optional<paddle::Tensor>& v_scales,
     const paddle::optional<paddle::Tensor>& k_scales_inv,
@@ -120,7 +116,6 @@ std::vector<paddle::Tensor> BlockAttnDecoupleKernel(
                                        : xftblock::DataType::DT_FLOAT16;
   auto cache_shape = key_cache.dims();
   auto block_table_shape = block_tables.dims();
-  const int bsz = cum_offsets.dims()[0];
   const int block_batch = block_table_shape[0];
   const int max_block_per_seq = block_table_shape[1];
   const int kv_num_heads = cache_shape[1];
@@ -368,13 +363,6 @@ std::vector<paddle::Tensor> BlockAttnDecoupleKernel(
               decoder_context_len
                   .data<int32_t>())};  // use for speculative_attention_decoder
                                        // seq_len in MTP
-      api::VectorParam<int32_t> decoder_context_len_cache_vp = {
-          const_cast<int32_t*>(decoder_context_len_cache_cpu.data<int32_t>()),
-          dec_batch,
-          const_cast<int32_t*>(
-              decoder_context_len_cache
-                  .data<int32_t>())};  // use for split rope enc as prefix cache
-                                       // len in MTP
       api::VectorParam<int32_t> decoder_batch_map_vp = {
           const_cast<int32_t*>(decoder_batch_map_cpu.data<int32_t>()),
           dec_batch,
@@ -656,8 +644,6 @@ std::vector<paddle::Tensor> BlockAttnDecouple(
     const paddle::Tensor& v_dec,
     const paddle::Tensor& key_cache,
     const paddle::Tensor& value_cache,
-    const paddle::Tensor& cum_offsets,
-    const paddle::Tensor& rotary_embs,
     const paddle::Tensor& block_tables,
     const paddle::Tensor& prefix_block_tables,
     const paddle::Tensor& len_info_cpu,
@@ -668,7 +654,6 @@ std::vector<paddle::Tensor> BlockAttnDecouple(
     const paddle::Tensor& decoder_context_len_cpu,
     const paddle::Tensor& decoder_context_len_cache_cpu,
     const paddle::Tensor& decoder_batch_map_cpu,
-    const paddle::Tensor& prefix_len_cpu,
     const paddle::Tensor& encoder_seq_lod,
     const paddle::Tensor& decoder_seq_lod,
     const paddle::Tensor& encoder_kv_lod,
@@ -676,7 +661,6 @@ std::vector<paddle::Tensor> BlockAttnDecouple(
     const paddle::Tensor& decoder_context_len,
     const paddle::Tensor& decoder_context_len_cache,
     const paddle::Tensor& decoder_batch_map,
-    const paddle::Tensor& prefix_len,
     const paddle::optional<paddle::Tensor>& k_scales,
     const paddle::optional<paddle::Tensor>& v_scales,
     const paddle::optional<paddle::Tensor>& k_scales_inv,
@@ -689,8 +673,6 @@ std::vector<paddle::Tensor> BlockAttnDecouple(
   return BlockAttnDecoupleKernel<TX, TC, TS>(q_enc, k_enc, v_enc, q_dec, k_dec, v_dec,                           \
                                      key_cache,                     \
                                      value_cache,                   \
-                                     cum_offsets,                   \
-                                     rotary_embs,                   \
                                      block_tables,                  \
                                      prefix_block_tables,           \
                                      len_info_cpu,                  \
@@ -701,7 +683,6 @@ std::vector<paddle::Tensor> BlockAttnDecouple(
                                      decoder_context_len_cpu,       \
                                      decoder_context_len_cache_cpu, \
                                      decoder_batch_map_cpu,         \
-                                     prefix_len_cpu,                \
                                      encoder_seq_lod,               \
                                      decoder_seq_lod,               \
                                      encoder_kv_lod,                \
@@ -709,7 +690,6 @@ std::vector<paddle::Tensor> BlockAttnDecouple(
                                      decoder_context_len,           \
                                      decoder_context_len_cache,     \
                                      decoder_batch_map,             \
-                                     prefix_len,                    \
                                      k_scales,                      \
                                      v_scales,                      \
                                      k_scales_inv,                  \
@@ -764,8 +744,6 @@ PD_BUILD_STATIC_OP(block_attn_decouple)
              "v_dec",
              "key_cache",
              "value_cache",
-             "cum_offsets",
-             "rotary_embs",
              "block_tables",
              "prefix_block_tables",
              "len_info_cpu",
@@ -776,7 +754,6 @@ PD_BUILD_STATIC_OP(block_attn_decouple)
              "decoder_context_len_cpu",
              "decoder_context_len_cache_cpu",
              "decoder_batch_map_cpu",
-             "prefix_len_cpu",
              "encoder_seq_lod",
              "decoder_seq_lod",
              "encoder_kv_lod",
@@ -784,7 +761,6 @@ PD_BUILD_STATIC_OP(block_attn_decouple)
              "decoder_context_len",
              "decoder_context_len_cache",
              "decoder_batch_map",
-             "prefix_len",
              paddle::Optional("k_scales"),
              paddle::Optional("v_scales"),
              paddle::Optional("k_scales_inv"),
