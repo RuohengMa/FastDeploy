@@ -123,14 +123,10 @@ std::vector<paddle::Tensor> BlockAttnDecouple(
     const paddle::Tensor& encoder_batch_map_xpu,
     const paddle::Tensor& decoder_context_len_xpu,
     const paddle::Tensor& decoder_batch_map_xpu,
-    const paddle::optional<paddle::Tensor>& k_scales,
-    const paddle::optional<paddle::Tensor>& v_scales,
     const paddle::optional<paddle::Tensor>& k_scales_inv,
     const paddle::optional<paddle::Tensor>& v_scales_inv,
     const paddle::optional<paddle::Tensor>& k_zeros,
-    const paddle::optional<paddle::Tensor>& v_zeros,
-    const paddle::optional<paddle::Tensor>& shift,
-    const paddle::optional<paddle::Tensor>& smooth);
+    const paddle::optional<paddle::Tensor>& v_zeros);
 
 std::vector<paddle::Tensor> SplitRopeKVCache(
     const paddle::Tensor& qkv,
@@ -769,14 +765,10 @@ PYBIND11_MODULE(fastdeploy_ops, m) {
         py::arg("encoder_batch_map_xpu"),
         py::arg("decoder_context_len_xpu"),
         py::arg("decoder_batch_map_xpu"),
-        py::arg("k_scales"),
-        py::arg("v_scales"),
         py::arg("k_scales_inv"),
         py::arg("v_scales_inv"),
         py::arg("k_zeros"),
         py::arg("v_zeros"),
-        py::arg("shift"),
-        py::arg("smooth"),
         "block attention in XPU");
 
   m.def("split_rope_kvcache",

@@ -87,8 +87,6 @@ std::vector<paddle::Tensor> BlockAttnDecoupleKernel(
     const paddle::Tensor& encoder_batch_map,
     const paddle::Tensor& decoder_context_len,
     const paddle::Tensor& decoder_batch_map,
-    const paddle::optional<paddle::Tensor>& k_scales,
-    const paddle::optional<paddle::Tensor>& v_scales,
     const paddle::optional<paddle::Tensor>& k_scales_inv,
     const paddle::optional<paddle::Tensor>& v_scales_inv,
     const paddle::optional<paddle::Tensor>& k_zeros,
@@ -139,26 +137,13 @@ std::vector<paddle::Tensor> BlockAttnDecoupleKernel(
   // TODO(lizanz03): only support c8 zp per channel
   bool is_cache_int8 = std::is_same<int8_t, XPU_CType>::value;
   bool has_zp = k_zeros && v_zeros;
-  XPU_SType *quant_k_scale{nullptr}, *quant_v_scale{nullptr},
-      *quant_k_scale_inv_zp{nullptr}, *quant_v_scale_inv_zp{nullptr},
-      *quant_k_zp{nullptr}, *quant_v_zp{nullptr};
+  XPU_SType *quant_k_scale_inv_zp{nullptr};
   // maxptr for xfa
   float *quant_k_scale_inv{nullptr}, *quant_v_scale_inv{nullptr};
   if (is_cache_int8) {
-    // only support c8 per channel
-    quant_k_scale = reinterpret_cast<XPU_SType*>(
-        const_cast<sdata_t*>(k_scales.get().data<sdata_t>()));
-    quant_v_scale = reinterpret_cast<XPU_SType*>(
-        const_cast<sdata_t*>(v_scales.get().data<sdata_t>()));
     if (has_zp) {
       quant_k_scale_inv_zp = reinterpret_cast<XPU_SType*>(
           const_cast<sdata_t*>(k_scales_inv.get().data<sdata_t>()));
-      quant_v_scale_inv_zp = reinterpret_cast<XPU_SType*>(
-          const_cast<sdata_t*>(v_scales_inv.get().data<sdata_t>()));
-      quant_k_zp = reinterpret_cast<XPU_SType*>(
-          const_cast<sdata_t*>(k_zeros.get().data<sdata_t>()));
-      quant_v_zp = reinterpret_cast<XPU_SType*>(
-          const_cast<sdata_t*>(v_zeros.get().data<sdata_t>()));
     } else {
       quant_k_scale_inv = reinterpret_cast<float*>(
           const_cast<float*>(k_scales_inv.get().data<float>()));
@@ -271,32 +256,6 @@ std::vector<paddle::Tensor> BlockAttnDecoupleKernel(
     }
     PD_CHECK(ret == api::SUCCESS,
              "xftblock::xft_context_core_attenion_block failed.");
-
-    if (is_cache_int8 && has_zp && is_prefix_cache) {
-      int64_t q_head_num = param.head_num;
-      int64_t kv_head_num = param.kv_head_num;
-      // out = (out - v_zeros) * v_scales_inv
-      ret = api::broadcast_sub<XPU_XType>(xpu_ctx->x_context(),
-                                          encode_output.data<XPU_XType>(),
-                                          quant_v_zp,
-                                          encode_output.data<XPU_XType>(),
-                                          {total_enc_len,
-                                           kv_head_num,
-                                           q_head_num / kv_head_num,
-                                           param.head_dim},
-                                          {1, kv_head_num, 1, param.head_dim});
-      PD_CHECK(ret == api::SUCCESS, "api::broadcast_sub failed.");
-      ret = api::broadcast_mul<XPU_XType>(xpu_ctx->x_context(),
-                                          encode_output.data<XPU_XType>(),
-                                          quant_v_scale_inv_zp,
-                                          encode_output.data<XPU_XType>(),
-                                          {total_enc_len,
-                                           kv_head_num,
-                                           q_head_num / kv_head_num,
-                                           param.head_dim},
-                                          {1, kv_head_num, 1, param.head_dim});
-      PD_CHECK(ret == api::SUCCESS, "api::broadcast_mul failed.");
-    }
   }
 
   if (dec_batch > 0) {
@@ -553,35 +512,6 @@ std::vector<paddle::Tensor> BlockAttnDecoupleKernel(
       PD_CHECK(ret == api::SUCCESS,
                "xftblock::xft_decoder_core_attenion_block failed.");
     }
-
-    if (is_cache_int8 && has_zp) {
-      int64_t q_head_num = param.head_num;
-      int64_t kv_head_num = param.kv_head_num;
-      // out = (out - v_zeros) * v_scales_inv
-      if (quant_v_zp) {
-        ret =
-            api::broadcast_sub<XPU_XType>(xpu_ctx->x_context(),
-                                          decode_output.data<XPU_XType>(),
-                                          quant_v_zp,
-                                          decode_output.data<XPU_XType>(),
-                                          {total_dec_len,
-                                           kv_head_num,
-                                           q_head_num / kv_head_num,
-                                           param.head_dim},
-                                          {1, kv_head_num, 1, param.head_dim});
-        PD_CHECK(ret == api::SUCCESS, "api::broadcast_sub failed.");
-      }
-      ret = api::broadcast_mul<XPU_XType>(xpu_ctx->x_context(),
-                                          decode_output.data<XPU_XType>(),
-                                          quant_v_scale_inv_zp,
-                                          decode_output.data<XPU_XType>(),
-                                          {total_dec_len,
-                                           kv_head_num,
-                                           q_head_num / kv_head_num,
-                                           param.head_dim},
-                                          {1, kv_head_num, 1, param.head_dim});
-      PD_CHECK(ret == api::SUCCESS, "api::broadcast_mul failed.");
-    }
   }
 
   return {block_attn_out};
@@ -612,8 +542,6 @@ std::vector<paddle::Tensor> BlockAttnDecouple(
     const paddle::Tensor& encoder_batch_map,
     const paddle::Tensor& decoder_context_len,
     const paddle::Tensor& decoder_batch_map,
-    const paddle::optional<paddle::Tensor>& k_scales,
-    const paddle::optional<paddle::Tensor>& v_scales,
     const paddle::optional<paddle::Tensor>& k_scales_inv,
     const paddle::optional<paddle::Tensor>& v_scales_inv,
     const paddle::optional<paddle::Tensor>& k_zeros,
@@ -638,8 +566,6 @@ std::vector<paddle::Tensor> BlockAttnDecouple(
                                      encoder_batch_map,             \
                                      decoder_context_len,           \
                                      decoder_batch_map,             \
-                                     k_scales,                      \
-                                     v_scales,                      \
                                      k_scales_inv,                  \
                                      v_scales_inv,                  \
                                      k_zeros,                       \
@@ -706,8 +632,6 @@ PD_BUILD_STATIC_OP(block_attn_decouple)
              "encoder_batch_map",
              "decoder_context_len",
              "decoder_batch_map",
-             paddle::Optional("k_scales"),
-             paddle::Optional("v_scales"),
              paddle::Optional("k_scales_inv"),
              paddle::Optional("v_scales_inv"),
              paddle::Optional("k_zeros"),

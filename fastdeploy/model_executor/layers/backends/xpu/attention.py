@@ -257,14 +257,14 @@ class XPUAttentionBackend(AttentionBackend):
             encoder_batch_map,
             decoder_context_len,
             decoder_batch_map,
-            k_scales,
-            v_scales,
             k_scales_inv,
             v_scales_inv,
             k_zeros,
-            v_zeros,
-            shift,
-            smooth)
+            v_zeros)
+        
+        is_cache_int8 = key_cache.dtype == paddle.int8
+        has_zp = k_zeros is not None and v_zeros is not None
+        is_prefix_cache = len_info_cpu[5] > 0
         
         token_num = qkv.shape[0]
         head_dim = key_cache.shape[3]
@@ -277,15 +277,31 @@ class XPUAttentionBackend(AttentionBackend):
         dec_batch = len_info_cpu[1]
         total_enc_len = len_info_cpu[2]
         total_dec_len = token_num - total_enc_len
-        if shift:
-            if enc_batch > 0:
+        if enc_batch > 0:
+            if is_cache_int8 and has_zp and is_prefix_cache:
+                # out = (out - v_zeros) * v_scales_inv
+                out_reshaped = paddle.reshape(
+                    out[:total_enc_len, :],
+                    [total_enc_len, kv_num_heads, num_heads / kv_num_heads, head_dim]) - paddle.reshape(v_zeros, [1, kv_num_heads, 1, head_dim])
+                out_reshaped = out_reshaped * paddle.reshape(v_scales_inv, [1, kv_num_heads, 1, head_dim])
+                out[:total_enc_len, :] = paddle.reshape(out_reshaped, out[:total_enc_len, :].shape)
+            if shift:
                 out[:total_enc_len, :] = out[:total_enc_len, :] + shift
-            if dec_batch > 0:
-                out[total_enc_len:, :] = out[total_enc_len:, :] + shift
-        if smooth:
-            if enc_batch > 0:
+            if smooth:
                 out[:total_enc_len, :] = out[:total_enc_len, :] * smooth
-            if dec_batch > 0:
+        if dec_batch > 0:
+            if is_cache_int8 and has_zp:
+                # out = (out - v_zeros) * v_scales_inv
+                out_reshaped = paddle.reshape(
+                    out[total_enc_len:, :],
+                    [total_dec_len, kv_num_heads, num_heads / kv_num_heads, head_dim])
+                if v_zeros is not None:
+                    out_reshaped = out_reshaped - paddle.reshape(v_zeros, [1, kv_num_heads, 1, head_dim])
+                out_reshaped = out_reshaped * paddle.reshape(v_scales_inv, [1, kv_num_heads, 1, head_dim])
+                out[total_enc_len:, :] = paddle.reshape(out_reshaped, out[total_enc_len:, :].shape)
+            if shift:
+                out[total_enc_len:, :] = out[total_enc_len:, :] + shift
+            if smooth:
                 out[total_enc_len:, :] = out[total_enc_len:, :] * smooth
         return out
 
