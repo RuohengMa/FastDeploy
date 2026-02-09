@@ -265,6 +265,28 @@ class XPUAttentionBackend(AttentionBackend):
             v_zeros,
             shift,
             smooth)
+        
+        token_num = qkv.shape[0]
+        head_dim = key_cache.shape[3]
+        total_num_head = qkv.shape[-1] // head_dim
+        kv_num_heads = key_cache.shape[1]
+        num_heads = total_num_head - 2 * kv_num_heads
+        hidden_dim = num_heads * head_dim
+
+        enc_batch = len_info_cpu[0]
+        dec_batch = len_info_cpu[1]
+        total_enc_len = len_info_cpu[2]
+        total_dec_len = token_num - total_enc_len
+        if shift:
+            if enc_batch > 0:
+                out[:total_enc_len, :] = out[:total_enc_len, :] + shift
+            if dec_batch > 0:
+                out[total_enc_len:, :] = out[total_enc_len:, :] + shift
+        if smooth:
+            if enc_batch > 0:
+                out[:total_enc_len, :] = out[:total_enc_len, :] * smooth
+            if dec_batch > 0:
+                out[total_enc_len:, :] = out[total_enc_len:, :] * smooth
         return out
 
     def forward_mixed(
@@ -298,8 +320,9 @@ class XPUAttentionBackend(AttentionBackend):
         q_norm_weight = getattr(layer, "q_norm_weight", None)
         k_norm_weight = getattr(layer, "k_norm_weight", None)
 
-        # res = block_attn(
-        res = self.decouple_block_attn(
+        # func = block_attn
+        func = self.decouple_block_attn
+        res = func(
             qkv,
             forward_meta.caches[2 * layer.layer_id],
             forward_meta.caches[2 * layer.layer_id + 1],

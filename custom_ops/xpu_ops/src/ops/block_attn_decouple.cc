@@ -92,9 +92,7 @@ std::vector<paddle::Tensor> BlockAttnDecoupleKernel(
     const paddle::optional<paddle::Tensor>& k_scales_inv,
     const paddle::optional<paddle::Tensor>& v_scales_inv,
     const paddle::optional<paddle::Tensor>& k_zeros,
-    const paddle::optional<paddle::Tensor>& v_zeros,
-    const paddle::optional<paddle::Tensor>& shift,
-    const paddle::optional<paddle::Tensor>& smooth) {
+    const paddle::optional<paddle::Tensor>& v_zeros) {
   phi::XPUPlace place(phi::backends::xpu::GetXPUCurrentDeviceId());
   auto dev_ctx = paddle::experimental::DeviceContextPool::Instance().Get(place);
   auto xpu_ctx = static_cast<const phi::XPUContext*>(dev_ctx);
@@ -146,21 +144,12 @@ std::vector<paddle::Tensor> BlockAttnDecoupleKernel(
       *quant_k_zp{nullptr}, *quant_v_zp{nullptr};
   // maxptr for xfa
   float *quant_k_scale_inv{nullptr}, *quant_v_scale_inv{nullptr};
-  XPU_XType *p_shift{nullptr}, *p_smooth{nullptr};
   if (is_cache_int8) {
     // only support c8 per channel
     quant_k_scale = reinterpret_cast<XPU_SType*>(
         const_cast<sdata_t*>(k_scales.get().data<sdata_t>()));
     quant_v_scale = reinterpret_cast<XPU_SType*>(
         const_cast<sdata_t*>(v_scales.get().data<sdata_t>()));
-    if (shift) {
-      p_shift = reinterpret_cast<XPU_XType*>(
-          const_cast<data_t*>(shift.get().data<data_t>()));
-    }
-    if (smooth) {
-      p_smooth = reinterpret_cast<XPU_XType*>(
-          const_cast<data_t*>(smooth.get().data<data_t>()));
-    }
     if (has_zp) {
       quant_k_scale_inv_zp = reinterpret_cast<XPU_SType*>(
           const_cast<sdata_t*>(k_scales_inv.get().data<sdata_t>()));
@@ -307,24 +296,6 @@ std::vector<paddle::Tensor> BlockAttnDecoupleKernel(
                                            param.head_dim},
                                           {1, kv_head_num, 1, param.head_dim});
       PD_CHECK(ret == api::SUCCESS, "api::broadcast_mul failed.");
-    }
-    if (p_shift != nullptr) {
-      ret = api::broadcast_add<XPU_XType>(xpu_ctx->x_context(),
-                                          p_shift,
-                                          encode_output.data<XPU_XType>(),
-                                          encode_output.data<XPU_XType>(),
-                                          {1, hidden_dim},
-                                          {total_enc_len, hidden_dim});
-      PD_CHECK(ret == api::SUCCESS, "api::broadcast_add for shift failed.");
-    }
-    if (p_smooth != nullptr) {
-      ret = api::broadcast_mul<XPU_XType>(xpu_ctx->x_context(),
-                                          p_smooth,
-                                          encode_output.data<XPU_XType>(),
-                                          encode_output.data<XPU_XType>(),
-                                          {1, hidden_dim},
-                                          {total_enc_len, hidden_dim});
-      PD_CHECK(ret == api::SUCCESS, "api::broadcast_mul for smooth failed.");
     }
   }
 
@@ -611,24 +582,6 @@ std::vector<paddle::Tensor> BlockAttnDecoupleKernel(
                                           {1, kv_head_num, 1, param.head_dim});
       PD_CHECK(ret == api::SUCCESS, "api::broadcast_mul failed.");
     }
-    if (p_shift != nullptr) {
-      ret = api::broadcast_add<XPU_XType>(xpu_ctx->x_context(),
-                                          p_shift,
-                                          decode_output.data<XPU_XType>(),
-                                          decode_output.data<XPU_XType>(),
-                                          {1, hidden_dim},
-                                          {total_dec_len, hidden_dim});
-      PD_CHECK(ret == api::SUCCESS, "api::broadcast_add for shift failed.");
-    }
-    if (p_smooth != nullptr) {
-      ret = api::broadcast_mul<XPU_XType>(xpu_ctx->x_context(),
-                                          p_smooth,
-                                          decode_output.data<XPU_XType>(),
-                                          decode_output.data<XPU_XType>(),
-                                          {1, hidden_dim},
-                                          {total_dec_len, hidden_dim});
-      PD_CHECK(ret == api::SUCCESS, "api::broadcast_mul for smooth failed.");
-    }
   }
 
   return {block_attn_out};
@@ -664,9 +617,7 @@ std::vector<paddle::Tensor> BlockAttnDecouple(
     const paddle::optional<paddle::Tensor>& k_scales_inv,
     const paddle::optional<paddle::Tensor>& v_scales_inv,
     const paddle::optional<paddle::Tensor>& k_zeros,
-    const paddle::optional<paddle::Tensor>& v_zeros,
-    const paddle::optional<paddle::Tensor>& shift,
-    const paddle::optional<paddle::Tensor>& smooth) {
+    const paddle::optional<paddle::Tensor>& v_zeros) {
 #define APPLY_KERNEL(TX, TC, TS)                                    \
   return BlockAttnDecoupleKernel<TX, TC, TS>(q_enc, k_enc, v_enc, q_dec, k_dec, v_dec,                           \
                                      key_cache,                     \
@@ -692,9 +643,7 @@ std::vector<paddle::Tensor> BlockAttnDecouple(
                                      k_scales_inv,                  \
                                      v_scales_inv,                  \
                                      k_zeros,                       \
-                                     v_zeros,                       \
-                                     shift,                         \
-                                     smooth);
+                                     v_zeros);
 
   const auto cache_dtype = key_cache.dtype();
   if (cache_dtype == paddle::DataType::BFLOAT16) {
@@ -762,9 +711,7 @@ PD_BUILD_STATIC_OP(block_attn_decouple)
              paddle::Optional("k_scales_inv"),
              paddle::Optional("v_scales_inv"),
              paddle::Optional("k_zeros"),
-             paddle::Optional("v_zeros"),
-             paddle::Optional("shift"),
-             paddle::Optional("smooth")})
+             paddle::Optional("v_zeros")})
     .Outputs({"block_attn_out"})
     .SetKernelFn(PD_KERNEL(BlockAttnDecouple))
     .SetInferShapeFn(PD_INFER_SHAPE(BlockAttnDecoupleInferShape))
