@@ -256,7 +256,6 @@ class XPUAttentionBackend(AttentionBackend):
             encoder_kv_lod,
             encoder_batch_map,
             decoder_context_len,
-            decoder_context_len_cache,
             decoder_batch_map,
             k_scales,
             v_scales,

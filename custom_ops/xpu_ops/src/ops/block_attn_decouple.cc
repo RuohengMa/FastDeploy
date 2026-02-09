@@ -86,7 +86,6 @@ std::vector<paddle::Tensor> BlockAttnDecoupleKernel(
     const paddle::Tensor& encoder_kv_lod,
     const paddle::Tensor& encoder_batch_map,
     const paddle::Tensor& decoder_context_len,
-    const paddle::Tensor& decoder_context_len_cache,
     const paddle::Tensor& decoder_batch_map,
     const paddle::optional<paddle::Tensor>& k_scales,
     const paddle::optional<paddle::Tensor>& v_scales,
@@ -659,7 +658,6 @@ std::vector<paddle::Tensor> BlockAttnDecouple(
     const paddle::Tensor& encoder_kv_lod,
     const paddle::Tensor& encoder_batch_map,
     const paddle::Tensor& decoder_context_len,
-    const paddle::Tensor& decoder_context_len_cache,
     const paddle::Tensor& decoder_batch_map,
     const paddle::optional<paddle::Tensor>& k_scales,
     const paddle::optional<paddle::Tensor>& v_scales,
@@ -688,7 +686,6 @@ std::vector<paddle::Tensor> BlockAttnDecouple(
                                      encoder_kv_lod,                \
                                      encoder_batch_map,             \
                                      decoder_context_len,           \
-                                     decoder_context_len_cache,     \
                                      decoder_batch_map,             \
                                      k_scales,                      \
                                      v_scales,                      \
@@ -759,7 +756,6 @@ PD_BUILD_STATIC_OP(block_attn_decouple)
              "encoder_kv_lod",
              "encoder_batch_map",
              "decoder_context_len",
-             "decoder_context_len_cache",
              "decoder_batch_map",
              paddle::Optional("k_scales"),
              paddle::Optional("v_scales"),
