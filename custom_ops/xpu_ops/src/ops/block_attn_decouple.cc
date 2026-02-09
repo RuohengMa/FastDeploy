@@ -99,13 +99,7 @@ std::vector<paddle::Tensor> BlockAttnDecoupleKernel(
     const paddle::optional<paddle::Tensor>& k_zeros,
     const paddle::optional<paddle::Tensor>& v_zeros,
     const paddle::optional<paddle::Tensor>& shift,
-    const paddle::optional<paddle::Tensor>& smooth,
-    const paddle::optional<paddle::Tensor>& q_norm_weight,
-    const paddle::optional<paddle::Tensor>& k_norm_weight,
-    const paddle::optional<paddle::Tensor>& kv_signal_data_cpu,
-    const paddle::optional<paddle::Tensor>& cachekv_signal_thread_cpu,
-    const bool use_neox_rotary_style,
-    const bool rope_3d) {
+    const paddle::optional<paddle::Tensor>& smooth) {
   phi::XPUPlace place(phi::backends::xpu::GetXPUCurrentDeviceId());
   auto dev_ctx = paddle::experimental::DeviceContextPool::Instance().Get(place);
   auto xpu_ctx = static_cast<const phi::XPUContext*>(dev_ctx);
@@ -146,28 +140,6 @@ std::vector<paddle::Tensor> BlockAttnDecoupleKernel(
   int max_enc_len = len_info_cpu.data<int32_t>()[3];
   int max_kv_len = len_info_cpu.data<int32_t>()[4];
   int prefix_block_num_per_seq = len_info_cpu.data<int32_t>()[5];
-
-  int rope_max_seqlen = 0;
-  int rope_head_dim = 0;
-  if (rope_3d) {
-    PD_CHECK(rotary_embs.dims().size() == 6,
-             "rotary_embs dim size should be 6 in multi-modal model");
-    rope_max_seqlen = rotary_embs.dims()[3];
-    rope_head_dim = rotary_embs.dims()[5];
-  } else {
-    PD_CHECK(rotary_embs.dims().size() == 5,
-             "rotary_embs dim size should be 5 in language model");
-    rope_max_seqlen = rotary_embs.dims()[2];
-    rope_head_dim = rotary_embs.dims()[4];
-  }
-  std::string pos_emb_type;
-  if (use_neox_rotary_style == true) {
-    pos_emb_type = "NEOX";
-  } else if (rope_head_dim == head_dim / 2) {
-    pos_emb_type = "HALF_HEAD_DIM";
-  } else {
-    pos_emb_type = "NORMAL";
-  }
 
   auto block_attn_out =
       paddle::empty({token_num, hidden_dim}, q_enc.type(), q_enc.place());
@@ -712,13 +684,7 @@ std::vector<paddle::Tensor> BlockAttnDecouple(
     const paddle::optional<paddle::Tensor>& k_zeros,
     const paddle::optional<paddle::Tensor>& v_zeros,
     const paddle::optional<paddle::Tensor>& shift,
-    const paddle::optional<paddle::Tensor>& smooth,
-    const paddle::optional<paddle::Tensor>& q_norm_weight,
-    const paddle::optional<paddle::Tensor>& k_norm_weight,
-    const paddle::optional<paddle::Tensor>& kv_signal_data_cpu,
-    const paddle::optional<paddle::Tensor>& cachekv_signal_thread_cpu,
-    const bool use_neox_rotary_style,
-    const bool rope_3d = false) {
+    const paddle::optional<paddle::Tensor>& smooth) {
 #define APPLY_KERNEL(TX, TC, TS)                                    \
   return BlockAttnDecoupleKernel<TX, TC, TS>(q_enc, k_enc, v_enc, q_dec, k_dec, v_dec,                           \
                                      key_cache,                     \
@@ -751,13 +717,7 @@ std::vector<paddle::Tensor> BlockAttnDecouple(
                                      k_zeros,                       \
                                      v_zeros,                       \
                                      shift,                         \
-                                     smooth,                        \
-                                     q_norm_weight,                 \
-                                     k_norm_weight,                 \
-                                     kv_signal_data_cpu,            \
-                                     cachekv_signal_thread_cpu,     \
-                                     use_neox_rotary_style,         \
-                                     rope_3d);
+                                     smooth);
 
   const auto cache_dtype = key_cache.dtype();
   if (cache_dtype == paddle::DataType::BFLOAT16) {
@@ -832,12 +792,7 @@ PD_BUILD_STATIC_OP(block_attn_decouple)
              paddle::Optional("k_zeros"),
              paddle::Optional("v_zeros"),
              paddle::Optional("shift"),
-             paddle::Optional("smooth"),
-             paddle::Optional("q_norm_weight"),
-             paddle::Optional("k_norm_weight"),
-             paddle::Optional("kv_signal_data_cpu"),
-             paddle::Optional("cachekv_signal_thread_cpu")})
-    .Attrs({"use_neox_rotary_style:bool", "rope_3d:bool"})
+             paddle::Optional("smooth")})
     .Outputs({"block_attn_out"})
     .SetKernelFn(PD_KERNEL(BlockAttnDecouple))
     .SetInferShapeFn(PD_INFER_SHAPE(BlockAttnDecoupleInferShape))

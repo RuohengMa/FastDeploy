@@ -269,13 +269,7 @@ class XPUAttentionBackend(AttentionBackend):
             k_zeros,
             v_zeros,
             shift,
-            smooth,
-            q_norm_weight,
-            k_norm_weight,
-            kv_signal_data_cpu,
-            cachekv_signal_thread_cpu,
-            use_neox_rotary_style,
-            rope_3d)
+            smooth)
         return out
 
     def forward_mixed(

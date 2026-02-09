@@ -135,13 +135,7 @@ std::vector<paddle::Tensor> BlockAttnDecouple(
     const paddle::optional<paddle::Tensor>& k_zeros,
     const paddle::optional<paddle::Tensor>& v_zeros,
     const paddle::optional<paddle::Tensor>& shift,
-    const paddle::optional<paddle::Tensor>& smooth,
-    const paddle::optional<paddle::Tensor>& q_norm_weight,
-    const paddle::optional<paddle::Tensor>& k_norm_weight,
-    const paddle::optional<paddle::Tensor>& kv_signal_data_cpu,
-    const paddle::optional<paddle::Tensor>& cachekv_signal_thread_cpu,
-    const bool use_neox_rotary_style,
-    const bool rope_3d = false);
+    const paddle::optional<paddle::Tensor>& smooth);
 
 std::vector<paddle::Tensor> SplitRopeKVCache(
     const paddle::Tensor& qkv,
@@ -793,12 +787,6 @@ PYBIND11_MODULE(fastdeploy_ops, m) {
         py::arg("v_zeros"),
         py::arg("shift"),
         py::arg("smooth"),
-        py::arg("q_norm_weight"),
-        py::arg("k_norm_weight"),
-        py::arg("kv_signal_data_cpu"),
-        py::arg("cachekv_signal_thread_cpu"),
-        py::arg("use_neox_rotary_style"),
-        py::arg("rope_3d") = false,
         "block attention in XPU");
 
   m.def("split_rope_kvcache",
