@@ -69,11 +69,9 @@ std::vector<paddle::Tensor> SplitRopeKVCacheKernel(
     const paddle::Tensor& cum_offsets,
     const paddle::Tensor& rotary_embs,
     const paddle::Tensor& block_tables,
-    const paddle::Tensor& prefix_block_tables,
     const paddle::Tensor& len_info_cpu,
     const paddle::Tensor& encoder_seq_lod_cpu,
     const paddle::Tensor& decoder_seq_lod_cpu,
-    const paddle::Tensor& encoder_kv_lod_cpu,
     const paddle::Tensor& encoder_batch_map_cpu,
     const paddle::Tensor& decoder_context_len_cpu,
     const paddle::Tensor& decoder_context_len_cache_cpu,
@@ -81,7 +79,6 @@ std::vector<paddle::Tensor> SplitRopeKVCacheKernel(
     const paddle::Tensor& prefix_len_cpu,
     const paddle::Tensor& encoder_seq_lod,
     const paddle::Tensor& decoder_seq_lod,
-    const paddle::Tensor& encoder_kv_lod,
     const paddle::Tensor& encoder_batch_map,
     const paddle::Tensor& decoder_context_len,
     const paddle::Tensor& decoder_context_len_cache,
@@ -93,8 +90,6 @@ std::vector<paddle::Tensor> SplitRopeKVCacheKernel(
     const paddle::optional<paddle::Tensor>& v_scales_inv,
     const paddle::optional<paddle::Tensor>& k_zeros,
     const paddle::optional<paddle::Tensor>& v_zeros,
-    const paddle::optional<paddle::Tensor>& shift,
-    const paddle::optional<paddle::Tensor>& smooth,
     const paddle::optional<paddle::Tensor>& q_norm_weight,
     const paddle::optional<paddle::Tensor>& k_norm_weight,
     const paddle::optional<paddle::Tensor>& kv_signal_data_cpu,
@@ -173,21 +168,12 @@ std::vector<paddle::Tensor> SplitRopeKVCacheKernel(
       *quant_k_zp{nullptr}, *quant_v_zp{nullptr};
   // maxptr for xfa
   float *quant_k_scale_inv{nullptr}, *quant_v_scale_inv{nullptr};
-  XPU_XType *p_shift{nullptr}, *p_smooth{nullptr};
   if (is_cache_int8) {
     // only support c8 per channel
     quant_k_scale = reinterpret_cast<XPU_SType*>(
         const_cast<sdata_t*>(k_scales.get().data<sdata_t>()));
     quant_v_scale = reinterpret_cast<XPU_SType*>(
         const_cast<sdata_t*>(v_scales.get().data<sdata_t>()));
-    if (shift) {
-      p_shift = reinterpret_cast<XPU_XType*>(
-          const_cast<data_t*>(shift.get().data<data_t>()));
-    }
-    if (smooth) {
-      p_smooth = reinterpret_cast<XPU_XType*>(
-          const_cast<data_t*>(smooth.get().data<data_t>()));
-    }
     if (has_zp) {
       quant_k_scale_inv_zp = reinterpret_cast<XPU_SType*>(
           const_cast<sdata_t*>(k_scales_inv.get().data<sdata_t>()));
@@ -624,11 +610,9 @@ std::vector<paddle::Tensor> SplitRopeKVCache(
     const paddle::Tensor& cum_offsets,
     const paddle::Tensor& rotary_embs,
     const paddle::Tensor& block_tables,
-    const paddle::Tensor& prefix_block_tables,
     const paddle::Tensor& len_info_cpu,
     const paddle::Tensor& encoder_seq_lod_cpu,
     const paddle::Tensor& decoder_seq_lod_cpu,
-    const paddle::Tensor& encoder_kv_lod_cpu,
     const paddle::Tensor& encoder_batch_map_cpu,
     const paddle::Tensor& decoder_context_len_cpu,
     const paddle::Tensor& decoder_context_len_cache_cpu,
@@ -636,7 +620,6 @@ std::vector<paddle::Tensor> SplitRopeKVCache(
     const paddle::Tensor& prefix_len_cpu,
     const paddle::Tensor& encoder_seq_lod,
     const paddle::Tensor& decoder_seq_lod,
-    const paddle::Tensor& encoder_kv_lod,
     const paddle::Tensor& encoder_batch_map,
     const paddle::Tensor& decoder_context_len,
     const paddle::Tensor& decoder_context_len_cache,
@@ -648,8 +631,6 @@ std::vector<paddle::Tensor> SplitRopeKVCache(
     const paddle::optional<paddle::Tensor>& v_scales_inv,
     const paddle::optional<paddle::Tensor>& k_zeros,
     const paddle::optional<paddle::Tensor>& v_zeros,
-    const paddle::optional<paddle::Tensor>& shift,
-    const paddle::optional<paddle::Tensor>& smooth,
     const paddle::optional<paddle::Tensor>& q_norm_weight,
     const paddle::optional<paddle::Tensor>& k_norm_weight,
     const paddle::optional<paddle::Tensor>& kv_signal_data_cpu,
@@ -663,11 +644,9 @@ std::vector<paddle::Tensor> SplitRopeKVCache(
                                      cum_offsets,                   \
                                      rotary_embs,                   \
                                      block_tables,                  \
-                                     prefix_block_tables,           \
                                      len_info_cpu,                  \
                                      encoder_seq_lod_cpu,           \
                                      decoder_seq_lod_cpu,           \
-                                     encoder_kv_lod_cpu,            \
                                      encoder_batch_map_cpu,         \
                                      decoder_context_len_cpu,       \
                                      decoder_context_len_cache_cpu, \
@@ -675,7 +654,6 @@ std::vector<paddle::Tensor> SplitRopeKVCache(
                                      prefix_len_cpu,                \
                                      encoder_seq_lod,               \
                                      decoder_seq_lod,               \
-                                     encoder_kv_lod,                \
                                      encoder_batch_map,             \
                                      decoder_context_len,           \
                                      decoder_context_len_cache,     \
@@ -687,8 +665,6 @@ std::vector<paddle::Tensor> SplitRopeKVCache(
                                      v_scales_inv,                  \
                                      k_zeros,                       \
                                      v_zeros,                       \
-                                     shift,                         \
-                                     smooth,                        \
                                      q_norm_weight,                 \
                                      k_norm_weight,                 \
                                      kv_signal_data_cpu,            \
@@ -720,11 +696,9 @@ PD_BUILD_STATIC_OP(split_rope_kvcache)
              "cum_offsets",
              "rotary_embs",
              "block_tables",
-             "prefix_block_tables",
              "len_info_cpu",
              "encoder_seq_lod_cpu",
              "decoder_seq_lod_cpu",
-             "encoder_kv_lod_cpu",
              "encoder_batch_map_cpu",
              "decoder_context_len_cpu",
              "decoder_context_len_cache_cpu",
@@ -732,7 +706,6 @@ PD_BUILD_STATIC_OP(split_rope_kvcache)
              "prefix_len_cpu",
              "encoder_seq_lod",
              "decoder_seq_lod",
-             "encoder_kv_lod",
              "encoder_batch_map",
              "decoder_context_len",
              "decoder_context_len_cache",
@@ -744,8 +717,6 @@ PD_BUILD_STATIC_OP(split_rope_kvcache)
              paddle::Optional("v_scales_inv"),
              paddle::Optional("k_zeros"),
              paddle::Optional("v_zeros"),
-             paddle::Optional("shift"),
-             paddle::Optional("smooth"),
              paddle::Optional("q_norm_weight"),
              paddle::Optional("k_norm_weight"),
              paddle::Optional("kv_signal_data_cpu"),
