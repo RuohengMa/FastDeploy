@@ -648,9 +648,6 @@ std::vector<paddle::Tensor> SplitRopeKVCache(
 #undef APPLY_KERNEL
 }
 
-// decouple comment
-// Inputs和Attrs暂时和block_attn一致
-// Ouputs为split后的q，k，v
 PD_BUILD_STATIC_OP(split_rope_kvcache)
     .Inputs({"qkv",
              "key_cache",
