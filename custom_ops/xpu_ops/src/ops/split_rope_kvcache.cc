@@ -86,8 +86,6 @@ std::vector<paddle::Tensor> SplitRopeKVCacheKernel(
     const paddle::Tensor& prefix_len,
     const paddle::optional<paddle::Tensor>& k_scales,
     const paddle::optional<paddle::Tensor>& v_scales,
-    const paddle::optional<paddle::Tensor>& k_scales_inv,
-    const paddle::optional<paddle::Tensor>& v_scales_inv,
     const paddle::optional<paddle::Tensor>& k_zeros,
     const paddle::optional<paddle::Tensor>& v_zeros,
     const paddle::optional<paddle::Tensor>& q_norm_weight,
@@ -164,10 +162,8 @@ std::vector<paddle::Tensor> SplitRopeKVCacheKernel(
   bool is_cache_int8 = std::is_same<int8_t, XPU_CType>::value;
   bool has_zp = k_zeros && v_zeros;
   XPU_SType *quant_k_scale{nullptr}, *quant_v_scale{nullptr},
-      *quant_k_scale_inv_zp{nullptr}, *quant_v_scale_inv_zp{nullptr},
+      *quant_v_scale_inv_zp{nullptr},
       *quant_k_zp{nullptr}, *quant_v_zp{nullptr};
-  // maxptr for xfa
-  float *quant_k_scale_inv{nullptr}, *quant_v_scale_inv{nullptr};
   if (is_cache_int8) {
     // only support c8 per channel
     quant_k_scale = reinterpret_cast<XPU_SType*>(
@@ -175,19 +171,10 @@ std::vector<paddle::Tensor> SplitRopeKVCacheKernel(
     quant_v_scale = reinterpret_cast<XPU_SType*>(
         const_cast<sdata_t*>(v_scales.get().data<sdata_t>()));
     if (has_zp) {
-      quant_k_scale_inv_zp = reinterpret_cast<XPU_SType*>(
-          const_cast<sdata_t*>(k_scales_inv.get().data<sdata_t>()));
-      quant_v_scale_inv_zp = reinterpret_cast<XPU_SType*>(
-          const_cast<sdata_t*>(v_scales_inv.get().data<sdata_t>()));
       quant_k_zp = reinterpret_cast<XPU_SType*>(
           const_cast<sdata_t*>(k_zeros.get().data<sdata_t>()));
       quant_v_zp = reinterpret_cast<XPU_SType*>(
           const_cast<sdata_t*>(v_zeros.get().data<sdata_t>()));
-    } else {
-      quant_k_scale_inv = reinterpret_cast<float*>(
-          const_cast<float*>(k_scales_inv.get().data<float>()));
-      quant_v_scale_inv = reinterpret_cast<float*>(
-          const_cast<float*>(v_scales_inv.get().data<float>()));
     }
   }
   const float *q_norm_weight_data{nullptr}, *k_norm_weight_data{nullptr};
@@ -200,13 +187,20 @@ std::vector<paddle::Tensor> SplitRopeKVCacheKernel(
   PD_CHECK(!(pos_emb_type == "NEOX" && q_norm_weight_data != nullptr),
            "split_neox_cache_kv_encoder not support q/k norm weight");
 
-  int ret = 0;
+  int ret;
   auto q_enc =
       paddle::empty({total_enc_len, hidden_dim}, qkv.type(), qkv.place());
   auto k_enc =
       paddle::empty({total_enc_len, kv_num_heads * head_dim}, qkv.type(), qkv.place());
   auto v_enc =
       paddle::empty({total_enc_len, kv_num_heads * head_dim}, qkv.type(), qkv.place());
+  auto q_dec =
+      paddle::empty({total_dec_len, hidden_dim}, qkv.type(), qkv.place());
+  auto k_dec =
+      paddle::empty({total_dec_len, kv_num_heads * head_dim}, qkv.type(), qkv.place());
+  auto v_dec =
+      paddle::empty({total_dec_len, kv_num_heads * head_dim}, qkv.type(), qkv.place());
+
   if (enc_batch > 0) {
     xftblock::TransformerParam param;
     xftblock::TransformerVsl vsl;
@@ -236,7 +230,6 @@ std::vector<paddle::Tensor> SplitRopeKVCacheKernel(
     xftblock::Tensor v_buf(v_enc.data(), KV_BUF_TYPE, {total_enc_len, kv_num_heads * head_dim});
 
     // rope + cache
-    int ret = 0;
     if (pos_emb_type == "NEOX") {
       ret = infer_ops::
           split_neox_cache_kv_encoder<XPU_XType, float, XPU_CType, int>(
@@ -351,33 +344,8 @@ std::vector<paddle::Tensor> SplitRopeKVCacheKernel(
         }
       }
     }
-
-    // decouple comment
-    // 放在这里还是block_attn里？
-    bool is_prefix_cache = prefix_block_num_per_seq > 0;
-    if (is_cache_int8 && has_zp && is_prefix_cache) {
-      int64_t q_head_num = param.head_num;
-      int64_t kv_head_num = param.kv_head_num;
-      // assume q_layout is BLHD, q = q * k_scales_inv
-      ret = api::broadcast_mul<XPU_XType>(xpu_ctx->x_context(),
-                                          q_buf.data<XPU_XType>(),
-                                          quant_k_scale_inv_zp,
-                                          q_buf.data<XPU_XType>(),
-                                          {total_enc_len,
-                                           kv_head_num,
-                                           q_head_num / kv_head_num,
-                                           param.head_dim},
-                                          {1, kv_head_num, 1, param.head_dim});
-      PD_CHECK(ret == api::SUCCESS, "api::broadcast_mul failed.");
-    }
   }
 
-  auto q_dec =
-      paddle::empty({total_dec_len, hidden_dim}, qkv.type(), qkv.place());
-  auto k_dec =
-      paddle::empty({total_dec_len, kv_num_heads * head_dim}, qkv.type(), qkv.place());
-  auto v_dec =
-      paddle::empty({total_dec_len, kv_num_heads * head_dim}, qkv.type(), qkv.place());
   if (dec_batch > 0) {
     xftblock::TransformerParam param;
     xftblock::TransformerVsl vsl;
@@ -413,7 +381,6 @@ std::vector<paddle::Tensor> SplitRopeKVCacheKernel(
                   .data<int32_t>())};  // use for split rope enc as lod in MTP
 
       // rope + cache
-      int ret = 0;
       if (pos_emb_type == "NEOX") {
         ret = infer_ops::
             split_neox_cache_kv_encoder<XPU_XType, float, XPU_CType, int>(
@@ -512,7 +479,6 @@ std::vector<paddle::Tensor> SplitRopeKVCacheKernel(
       xftblock::Tensor q_buf(q_dec.data(), KV_BUF_TYPE, {total_dec_len, hidden_dim});
 
       // rope + cache
-      int ret = 0;
       if (pos_emb_type == "NEOX") {
         ret = infer_ops::split_neox_cache_kv_decoder<XPU_XType,
                                                      float,
@@ -627,8 +593,6 @@ std::vector<paddle::Tensor> SplitRopeKVCache(
     const paddle::Tensor& prefix_len,
     const paddle::optional<paddle::Tensor>& k_scales,
     const paddle::optional<paddle::Tensor>& v_scales,
-    const paddle::optional<paddle::Tensor>& k_scales_inv,
-    const paddle::optional<paddle::Tensor>& v_scales_inv,
     const paddle::optional<paddle::Tensor>& k_zeros,
     const paddle::optional<paddle::Tensor>& v_zeros,
     const paddle::optional<paddle::Tensor>& q_norm_weight,
@@ -661,8 +625,6 @@ std::vector<paddle::Tensor> SplitRopeKVCache(
                                      prefix_len,                    \
                                      k_scales,                      \
                                      v_scales,                      \
-                                     k_scales_inv,                  \
-                                     v_scales_inv,                  \
                                      k_zeros,                       \
                                      v_zeros,                       \
                                      q_norm_weight,                 \
@@ -713,8 +675,6 @@ PD_BUILD_STATIC_OP(split_rope_kvcache)
              "prefix_len",
              paddle::Optional("k_scales"),
              paddle::Optional("v_scales"),
-             paddle::Optional("k_scales_inv"),
-             paddle::Optional("v_scales_inv"),
              paddle::Optional("k_zeros"),
              paddle::Optional("v_zeros"),
              paddle::Optional("q_norm_weight"),

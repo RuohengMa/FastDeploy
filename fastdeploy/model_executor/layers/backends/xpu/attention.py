@@ -198,6 +198,22 @@ class XPUAttentionBackend(AttentionBackend):
         use_neox_rotary_style,
         rope_3d):
         
+        is_cache_int8 = key_cache.dtype == paddle.int8
+        has_zp = k_zeros is not None and v_zeros is not None
+        is_prefix_cache = len_info_cpu[5] > 0
+        
+        token_num = qkv.shape[0]
+        head_dim = key_cache.shape[3]
+        total_num_head = qkv.shape[-1] // head_dim
+        kv_num_heads = key_cache.shape[1]
+        num_heads = total_num_head - 2 * kv_num_heads
+        hidden_dim = num_heads * head_dim
+
+        enc_batch = len_info_cpu[0]
+        dec_batch = len_info_cpu[1]
+        total_enc_len = len_info_cpu[2]
+        total_dec_len = token_num - total_enc_len
+        
         q_enc, k_enc, v_enc, q_dec, k_dec, v_dec = split_rope_kvcache(
             qkv,
             key_cache,
@@ -222,8 +238,6 @@ class XPUAttentionBackend(AttentionBackend):
             prefix_len,
             k_scales,
             v_scales,
-            k_scales_inv,
-            v_scales_inv,
             k_zeros,
             v_zeros,
             q_norm_weight,
@@ -232,6 +246,22 @@ class XPUAttentionBackend(AttentionBackend):
             cachekv_signal_thread_cpu,
             use_neox_rotary_style,
             rope_3d)
+        
+        # q = q * k_scales_inv
+        if is_cache_int8 and has_zp:
+            if enc_batch > 0 and is_prefix_cache:
+                q_enc_reshaped = paddle.reshape(
+                    q_enc,
+                    [total_enc_len, kv_num_heads, num_heads / kv_num_heads, head_dim])
+                q_enc_reshaped = q_enc_reshaped * paddle.reshape(k_scales_inv, [1, kv_num_heads, 1, head_dim])
+                q_enc = paddle.reshape(q_enc_reshaped, q_enc.shape)
+            if dec_batch > 0:
+                q_dec_reshaped = paddle.reshape(
+                    q_dec,
+                    [total_dec_len, kv_num_heads, num_heads / kv_num_heads, head_dim])
+                q_dec_reshaped = q_dec_reshaped * paddle.reshape(k_scales_inv, [1, kv_num_heads, 1, head_dim])
+                q_dec = paddle.reshape(q_dec_reshaped, q_dec.shape)
+                
         out = block_attn_decouple(
             q_enc,
             k_enc,
@@ -262,21 +292,6 @@ class XPUAttentionBackend(AttentionBackend):
             k_zeros,
             v_zeros)
         
-        is_cache_int8 = key_cache.dtype == paddle.int8
-        has_zp = k_zeros is not None and v_zeros is not None
-        is_prefix_cache = len_info_cpu[5] > 0
-        
-        token_num = qkv.shape[0]
-        head_dim = key_cache.shape[3]
-        total_num_head = qkv.shape[-1] // head_dim
-        kv_num_heads = key_cache.shape[1]
-        num_heads = total_num_head - 2 * kv_num_heads
-        hidden_dim = num_heads * head_dim
-
-        enc_batch = len_info_cpu[0]
-        dec_batch = len_info_cpu[1]
-        total_enc_len = len_info_cpu[2]
-        total_dec_len = token_num - total_enc_len
         if enc_batch > 0:
             if is_cache_int8 and has_zp and is_prefix_cache:
                 # out = (out - v_zeros) * v_scales_inv

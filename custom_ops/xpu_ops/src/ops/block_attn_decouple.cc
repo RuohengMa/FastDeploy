@@ -151,8 +151,17 @@ std::vector<paddle::Tensor> BlockAttnDecoupleKernel(
           const_cast<float*>(v_scales_inv.get().data<float>()));
     }
   }
+  bool is_prefix_cache = prefix_block_num_per_seq > 0;
 
-  int ret = 0;
+  int ret;
+  float* fake_perhead_scale = nullptr;
+  if (is_cache_int8 && has_zp && (enc_batch > 0 && is_prefix_cache || dec_batch > 0)) {
+    fake_perhead_scale = RAII_GUARD.alloc<float>(kv_num_heads);
+    // set fake_perhead_scale to ones
+    ret = api::constant<float>(
+        xpu_ctx->x_context(), fake_perhead_scale, kv_num_heads, 127.f);
+    PD_CHECK(ret == api::SUCCESS, "api::constant failed.");
+  }
   if (enc_batch > 0) {
     xftblock::TransformerParam param;
     xftblock::TransformerVsl vsl;
@@ -179,7 +188,6 @@ std::vector<paddle::Tensor> BlockAttnDecoupleKernel(
     param.max_valid_seqlen = max_enc_len;
     param.max_kv_valid_seqlen = max_kv_len;
     // setting for prefix cache
-    bool is_prefix_cache = prefix_block_num_per_seq > 0;
     param.prefill_len = is_prefix_cache ? param.max_valid_seqlen : -1;
     param.page_attn.block_size = block_size;
     param.page_attn.max_num_blocks_per_seq = prefix_block_num_per_seq;
@@ -193,52 +201,42 @@ std::vector<paddle::Tensor> BlockAttnDecoupleKernel(
         {prefix_block_tables.dims()[0], prefix_block_num_per_seq});
     param.page_attn.block_table = &prefix_block_tables_tensor;
 
-    float* fake_perhead_scale = nullptr;
-    if (is_cache_int8 && has_zp && is_prefix_cache) {
-      fake_perhead_scale = RAII_GUARD.alloc<float>(param.kv_head_num);
-      // set fake_perhead_scale to ones
-      int ret = api::constant<float>(
-          xpu_ctx->x_context(), fake_perhead_scale, param.kv_head_num, 127.f);
-      PD_CHECK(ret == api::SUCCESS, "api::constant failed.");
-    }
-
     // buf tensor
     xftblock::Tensor q_buf(const_cast<void*>(q_enc.data()), KV_BUF_TYPE, {total_enc_len, hidden_dim});
-    xftblock::Tensor k_buf(const_cast<void*>(k_enc.data()), KV_BUF_TYPE, {total_enc_len, kv_num_heads * head_dim});
-    xftblock::Tensor v_buf(const_cast<void*>(v_enc.data()), KV_BUF_TYPE, {total_enc_len, kv_num_heads * head_dim});
-
-    // kv cache tensor
-    xftblock::Tensor key_cache_tensor(
-        reinterpret_cast<void*>(
-            const_cast<cdata_t*>(key_cache.data<cdata_t>())),  // src_data
-        nullptr,                                               // max_data
-        has_zp                                                 // pc_scale
-            ? fake_perhead_scale
-            : quant_k_scale_inv,
-        is_cache_int8  // cache type
-            ? xftblock::DataType::DT_INT8
-            : KV_BUF_TYPE,
-        {cache_shape[0], cache_shape[1], cache_shape[2], cache_shape[3]});
-    xftblock::Tensor value_cache_tensor(
-        reinterpret_cast<void*>(
-            const_cast<cdata_t*>(value_cache.data<cdata_t>())),  // src_data
-        nullptr,                                                 // max_data
-        has_zp                                                   // pc_scale
-            ? fake_perhead_scale
-            : quant_v_scale_inv,
-        is_cache_int8  // cache type
-            ? xftblock::DataType::DT_INT8
-            : KV_BUF_TYPE,
-        {cache_shape[0], cache_shape[1], cache_shape[2], cache_shape[3]});
-
     xftblock::Tensor encode_output(reinterpret_cast<void*>(const_cast<data_t*>(
                                        block_attn_out.data<data_t>())),
                                    KV_BUF_TYPE,
                                    {total_enc_len, hidden_dim});
-
-    int ret = 0;
+                                   
     // attn encode
     if (is_prefix_cache) {
+      float* fake_perhead_scale_local = nullptr;
+      if (is_cache_int8 && has_zp) {
+        fake_perhead_scale_local = fake_perhead_scale;
+      }
+      // kv cache tensor
+      xftblock::Tensor key_cache_tensor(
+          reinterpret_cast<void*>(
+              const_cast<cdata_t*>(key_cache.data<cdata_t>())),  // src_data
+          nullptr,                                               // max_data
+          has_zp                                                 // pc_scale
+              ? fake_perhead_scale_local
+              : quant_k_scale_inv,
+          is_cache_int8  // cache type
+              ? xftblock::DataType::DT_INT8
+              : KV_BUF_TYPE,
+          {cache_shape[0], cache_shape[1], cache_shape[2], cache_shape[3]});
+      xftblock::Tensor value_cache_tensor(
+          reinterpret_cast<void*>(
+              const_cast<cdata_t*>(value_cache.data<cdata_t>())),  // src_data
+          nullptr,                                                 // max_data
+          has_zp                                                   // pc_scale
+              ? fake_perhead_scale_local
+              : quant_v_scale_inv,
+          is_cache_int8  // cache type
+              ? xftblock::DataType::DT_INT8
+              : KV_BUF_TYPE,
+          {cache_shape[0], cache_shape[1], cache_shape[2], cache_shape[3]});
       ret =
           xftblock::xft_context_core_attenion_block<XPU_XType,
                                                     XPU_CType,
@@ -250,6 +248,8 @@ std::vector<paddle::Tensor> BlockAttnDecoupleKernel(
                                                            param,
                                                            vsl);
     } else {
+      xftblock::Tensor k_buf(const_cast<void*>(k_enc.data()), KV_BUF_TYPE, {total_enc_len, kv_num_heads * head_dim});
+      xftblock::Tensor v_buf(const_cast<void*>(v_enc.data()), KV_BUF_TYPE, {total_enc_len, kv_num_heads * head_dim});
       ret = xftblock::
           xft_context_core_attenion_block<XPU_XType, XPU_XType, float>(
               &xctx, &q_buf, &k_buf, &v_buf, &encode_output, param, vsl);
@@ -268,6 +268,12 @@ std::vector<paddle::Tensor> BlockAttnDecoupleKernel(
     param.max_batch_size = block_batch;
     param.max_seq_len = max_seq_len;
     param.use_page_attn = true;
+    
+    float* fake_perhead_scale_local = nullptr;
+    if (is_cache_int8 && has_zp) {
+      fake_perhead_scale_local = fake_perhead_scale;
+    }
+    xftblock::Tensor q_buf(const_cast<void*>(q_dec.data()), KV_BUF_TYPE, {total_dec_len, hidden_dim});
     xftblock::Tensor decode_output(
         reinterpret_cast<void*>(
             const_cast<data_t*>(block_attn_out.data<data_t>()) +
@@ -281,7 +287,6 @@ std::vector<paddle::Tensor> BlockAttnDecoupleKernel(
       int q_len = Eq_len ? total_dec_len / dec_batch : 1;
       
       // buf tensor
-      xftblock::Tensor q_buf(const_cast<void*>(q_dec.data()), KV_BUF_TYPE, {total_dec_len, hidden_dim});
       xftblock::Tensor k_buf(const_cast<void*>(k_dec.data()), KV_BUF_TYPE, {total_dec_len, kv_num_heads * head_dim});
       xftblock::Tensor v_buf(const_cast<void*>(v_dec.data()), KV_BUF_TYPE, {total_dec_len, kv_num_heads * head_dim});
 
@@ -303,31 +308,6 @@ std::vector<paddle::Tensor> BlockAttnDecoupleKernel(
           const_cast<int32_t*>(
               decoder_seq_lod
                   .data<int32_t>())};  // use for split rope enc as lod in MTP
-
-      int ret = 0;
-
-      float* fake_perhead_scale = nullptr;
-      if (is_cache_int8 && has_zp) {
-        int64_t q_head_num = param.head_num;
-        int64_t kv_head_num = param.kv_head_num;
-        fake_perhead_scale = RAII_GUARD.alloc<float>(kv_head_num);
-        // q = q * k_scales_inv
-        ret =
-            api::broadcast_mul<XPU_XType>(xpu_ctx->x_context(),
-                                          q_buf.data<XPU_XType>(),
-                                          quant_k_scale_inv_zp,
-                                          q_buf.data<XPU_XType>(),
-                                          {total_dec_len,
-                                           kv_head_num,
-                                           q_head_num / kv_head_num,
-                                           param.head_dim},
-                                          {1, kv_head_num, 1, param.head_dim});
-        PD_CHECK(ret == api::SUCCESS, "api::broadcast_mul failed.");
-        // set fake_perhead_scale to ones
-        ret = api::constant<float>(
-            xpu_ctx->x_context(), fake_perhead_scale, kv_head_num, 127.f);
-        PD_CHECK(ret == api::SUCCESS, "api::constant failed.");
-      }
 
       XPU_XType* q_buf_ptr = q_buf.data<XPU_XType>();
       XPU_XType* decode_output_ptr = decode_output.data<XPU_XType>();
@@ -399,10 +379,10 @@ std::vector<paddle::Tensor> BlockAttnDecoupleKernel(
           -1,                 // max_window_size
           nullptr,            // q_maxptr
           has_zp              // k_cache_maxptr
-              ? fake_perhead_scale
+              ? fake_perhead_scale_local
               : quant_k_scale_inv,
           has_zp  // v_cache_maxptr
-              ? fake_perhead_scale
+              ? fake_perhead_scale_local
               : quant_v_scale_inv,
           nullptr,          // o_maxptr
           param.head_dim);  // vo_head_dim
@@ -432,7 +412,6 @@ std::vector<paddle::Tensor> BlockAttnDecoupleKernel(
           const_cast<int32_t*>(
               decoder_batch_map.data<int32_t>())};  // real batch
 
-      xftblock::Tensor q_buf(const_cast<void*>(q_dec.data()), KV_BUF_TYPE, {total_dec_len, hidden_dim});
       xftblock::Tensor block_table_tensor(
           reinterpret_cast<void*>(
               const_cast<int32_t*>(block_tables.data<int32_t>())),
@@ -448,37 +427,13 @@ std::vector<paddle::Tensor> BlockAttnDecoupleKernel(
       param.page_attn.max_num_blocks_per_seq = max_block_per_seq;
       param.page_attn.block_table = &block_table_tensor;
 
-      int ret = 0;
-
-      float* fake_perhead_scale = nullptr;
-      if (is_cache_int8 && has_zp) {
-        int64_t q_head_num = param.head_num;
-        int64_t kv_head_num = param.kv_head_num;
-        fake_perhead_scale = RAII_GUARD.alloc<float>(kv_head_num);
-        // q = q * k_scales_inv
-        ret =
-            api::broadcast_mul<XPU_XType>(xpu_ctx->x_context(),
-                                          q_buf.data<XPU_XType>(),
-                                          quant_k_scale_inv_zp,
-                                          q_buf.data<XPU_XType>(),
-                                          {total_dec_len,
-                                           kv_head_num,
-                                           q_head_num / kv_head_num,
-                                           param.head_dim},
-                                          {1, kv_head_num, 1, param.head_dim});
-        PD_CHECK(ret == api::SUCCESS, "api::broadcast_mul failed.");
-        // set fake_perhead_scale to ones
-        ret = api::constant<float>(
-            xpu_ctx->x_context(), fake_perhead_scale, kv_head_num, 127.f);
-        PD_CHECK(ret == api::SUCCESS, "api::constant failed.");
-      }
       // kv cache tensor
       xftblock::Tensor key_cache_tensor(
           reinterpret_cast<void*>(
               const_cast<cdata_t*>(key_cache.data<cdata_t>())),  // src_data
           nullptr,                                               // max_data
           has_zp                                                 // pc_scale
-              ? fake_perhead_scale
+              ? fake_perhead_scale_local
               : quant_k_scale_inv,
           is_cache_int8  // cache type
               ? xftblock::DataType::DT_INT8
@@ -489,7 +444,7 @@ std::vector<paddle::Tensor> BlockAttnDecoupleKernel(
               const_cast<cdata_t*>(value_cache.data<cdata_t>())),  // src_data
           nullptr,                                                 // max_data
           has_zp                                                   // pc_scale
-              ? fake_perhead_scale
+              ? fake_perhead_scale_local
               : quant_v_scale_inv,
           is_cache_int8  // cache type
               ? xftblock::DataType::DT_INT8
