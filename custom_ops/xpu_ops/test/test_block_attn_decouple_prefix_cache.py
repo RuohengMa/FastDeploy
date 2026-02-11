@@ -115,17 +115,31 @@ def decouple_block_attn(
     # q = q * k_scales_inv
     if is_cache_int8 and has_zp:
         if enc_batch > 0 and is_prefix_cache:
-            q_enc_reshaped = paddle.reshape(
+            origin_shape = q_enc.shape
+            q_enc_reshaped = paddle.view(
                 q_enc,
                 [total_enc_len, kv_num_heads, num_heads // kv_num_heads, head_dim])
-            q_enc_reshaped = q_enc_reshaped * paddle.reshape(k_scales_inv, [1, kv_num_heads, 1, head_dim])
-            q_enc = paddle.reshape(q_enc_reshaped, q_enc.shape)
+            q_enc_reshaped = q_enc_reshaped * paddle.view(k_scales_inv, [1, kv_num_heads, 1, head_dim])
+            q_enc = paddle.view(q_enc_reshaped, origin_shape)
+            
+            # q_enc_reshaped = paddle.reshape(
+            #     q_enc,
+            #     [total_enc_len, kv_num_heads, num_heads // kv_num_heads, head_dim])
+            # q_enc_reshaped = q_enc_reshaped * paddle.reshape(k_scales_inv, [1, kv_num_heads, 1, head_dim])
+            # q_enc = paddle.reshape(q_enc_reshaped, q_enc.shape)
         if dec_batch > 0:
-            q_dec_reshaped = paddle.reshape(
+            origin_shape = q_dec.shape
+            q_dec_reshaped = paddle.view(
                 q_dec,
                 [total_dec_len, kv_num_heads, num_heads // kv_num_heads, head_dim])
-            q_dec_reshaped = q_dec_reshaped * paddle.reshape(k_scales_inv, [1, kv_num_heads, 1, head_dim])
-            q_dec = paddle.reshape(q_dec_reshaped, q_dec.shape)
+            q_dec_reshaped = q_dec_reshaped * paddle.view(k_scales_inv, [1, kv_num_heads, 1, head_dim])
+            q_dec = paddle.view(q_dec_reshaped, origin_shape)
+            
+            # q_dec_reshaped = paddle.reshape(
+            #     q_dec,
+            #     [total_dec_len, kv_num_heads, num_heads // kv_num_heads, head_dim])
+            # q_dec_reshaped = q_dec_reshaped * paddle.reshape(k_scales_inv, [1, kv_num_heads, 1, head_dim])
+            # q_dec = paddle.reshape(q_dec_reshaped, q_dec.shape)
             
     out = block_attn_decouple(
         q_enc,
@@ -158,31 +172,67 @@ def decouple_block_attn(
         v_zeros)
     
     if enc_batch > 0:
+        if is_cache_int8 and has_zp and is_prefix_cache or shift or smooth:
+            sliced_out = out[:total_enc_len, :]
+            origin_shape = sliced_out.shape
         if is_cache_int8 and has_zp and is_prefix_cache:
             # out = (out - v_zeros) * v_scales_inv
-            out_reshaped = paddle.reshape(
-                out[:total_enc_len, :],
-                [total_enc_len, kv_num_heads, num_heads // kv_num_heads, head_dim]) - paddle.reshape(v_zeros, [1, kv_num_heads, 1, head_dim])
-            out_reshaped = out_reshaped * paddle.reshape(v_scales_inv, [1, kv_num_heads, 1, head_dim])
-            out[:total_enc_len, :] = paddle.reshape(out_reshaped, out[:total_enc_len, :].shape)
+            out_reshaped = paddle.view(
+                sliced_out,
+                [total_enc_len, kv_num_heads, num_heads // kv_num_heads, head_dim]) - paddle.view(v_zeros, [1, kv_num_heads, 1, head_dim])
+            out_reshaped = out_reshaped * paddle.view(v_scales_inv, [1, kv_num_heads, 1, head_dim])
+            sliced_out = paddle.view(out_reshaped, origin_shape)
         if shift:
-            out[:total_enc_len, :] = out[:total_enc_len, :] + shift
+            sliced_out = sliced_out + shift
         if smooth:
-            out[:total_enc_len, :] = out[:total_enc_len, :] * smooth
+            sliced_out = sliced_out * smooth
+        if is_cache_int8 and has_zp and is_prefix_cache or shift or smooth:
+            out[:total_enc_len, :] = sliced_out
+            
+        # if is_cache_int8 and has_zp and is_prefix_cache:
+        #     # out = (out - v_zeros) * v_scales_inv
+        #     out_reshaped = paddle.reshape(
+        #         out[:total_enc_len, :],
+        #         [total_enc_len, kv_num_heads, num_heads // kv_num_heads, head_dim]) - paddle.reshape(v_zeros, [1, kv_num_heads, 1, head_dim])
+        #     out_reshaped = out_reshaped * paddle.reshape(v_scales_inv, [1, kv_num_heads, 1, head_dim])
+        #     out[:total_enc_len, :] = paddle.reshape(out_reshaped, out[:total_enc_len, :].shape)
+        # if shift:
+        #     out[:total_enc_len, :] = out[:total_enc_len, :] + shift
+        # if smooth:
+        #     out[:total_enc_len, :] = out[:total_enc_len, :] * smooth
     if dec_batch > 0:
+        if is_cache_int8 and has_zp and is_prefix_cache or shift or smooth:
+            sliced_out = out[total_enc_len:, :]
+            origin_shape = sliced_out.shape
         if is_cache_int8 and has_zp:
             # out = (out - v_zeros) * v_scales_inv
-            out_reshaped = paddle.reshape(
-                out[total_enc_len:, :],
+            out_reshaped = paddle.view(
+                sliced_out,
                 [total_dec_len, kv_num_heads, num_heads // kv_num_heads, head_dim])
             if v_zeros is not None:
-                out_reshaped = out_reshaped - paddle.reshape(v_zeros, [1, kv_num_heads, 1, head_dim])
-            out_reshaped = out_reshaped * paddle.reshape(v_scales_inv, [1, kv_num_heads, 1, head_dim])
-            out[total_enc_len:, :] = paddle.reshape(out_reshaped, out[total_enc_len:, :].shape)
+                out_reshaped = out_reshaped - paddle.view(v_zeros, [1, kv_num_heads, 1, head_dim])
+            out_reshaped = out_reshaped * paddle.view(v_scales_inv, [1, kv_num_heads, 1, head_dim])
+            sliced_out = paddle.view(out_reshaped, origin_shape)
         if shift:
-            out[total_enc_len:, :] = out[total_enc_len:, :] + shift
+            sliced_out = sliced_out + shift
         if smooth:
-            out[total_enc_len:, :] = out[total_enc_len:, :] * smooth
+            sliced_out = sliced_out * smooth
+        if is_cache_int8 and has_zp and is_prefix_cache or shift or smooth:
+            out[total_enc_len:, :] = sliced_out
+            
+        # if is_cache_int8 and has_zp:
+        #     # out = (out - v_zeros) * v_scales_inv
+        #     out_reshaped = paddle.reshape(
+        #         out[total_enc_len:, :],
+        #         [total_dec_len, kv_num_heads, num_heads // kv_num_heads, head_dim])
+        #     if v_zeros is not None:
+        #         out_reshaped = out_reshaped - paddle.reshape(v_zeros, [1, kv_num_heads, 1, head_dim])
+        #     out_reshaped = out_reshaped * paddle.reshape(v_scales_inv, [1, kv_num_heads, 1, head_dim])
+        #     out[total_enc_len:, :] = paddle.reshape(out_reshaped, out[total_enc_len:, :].shape)
+        # if shift:
+        #     out[total_enc_len:, :] = out[total_enc_len:, :] + shift
+        # if smooth:
+        #     out[total_enc_len:, :] = out[total_enc_len:, :] * smooth
     return out
 
 head_num = 64
