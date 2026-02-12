@@ -198,6 +198,7 @@ class XPUAttentionBackend(AttentionBackend):
         use_neox_rotary_style,
         rope_3d):
         
+        '''
         is_cache_int8 = key_cache.dtype == paddle.int8
         has_zp = k_zeros is not None and v_zeros is not None
         is_prefix_cache = len_info_cpu[5] > 0
@@ -213,6 +214,7 @@ class XPUAttentionBackend(AttentionBackend):
         dec_batch = len_info_cpu[1]
         total_enc_len = len_info_cpu[2]
         total_dec_len = token_num - total_enc_len
+        '''
         
         q_enc, k_enc, v_enc, q_dec, k_dec, v_dec = split_rope_kvcache(
             qkv,
@@ -247,6 +249,7 @@ class XPUAttentionBackend(AttentionBackend):
             use_neox_rotary_style,
             rope_3d)
         
+        '''
         # q = q * k_scales_inv
         if is_cache_int8 and has_zp:
             if enc_batch > 0 and is_prefix_cache:
@@ -275,6 +278,7 @@ class XPUAttentionBackend(AttentionBackend):
                 #     [total_dec_len, kv_num_heads, num_heads // kv_num_heads, head_dim])
                 # q_dec_reshaped = q_dec_reshaped * paddle.reshape(k_scales_inv, [1, kv_num_heads, 1, head_dim])
                 # q_dec = paddle.reshape(q_dec_reshaped, q_dec.shape)
+        '''
                 
         out = block_attn_decouple(
             q_enc,
@@ -306,6 +310,7 @@ class XPUAttentionBackend(AttentionBackend):
             k_zeros,
             v_zeros)
         
+        '''
         if enc_batch > 0:
             if is_cache_int8 and has_zp and is_prefix_cache or shift or smooth:
                 sliced_out = out[:total_enc_len, :]
@@ -368,6 +373,7 @@ class XPUAttentionBackend(AttentionBackend):
             #     out[total_enc_len:, :] = out[total_enc_len:, :] + shift
             # if smooth:
             #     out[total_enc_len:, :] = out[total_enc_len:, :] * smooth
+        '''
         return out
 
     def forward_mixed(
