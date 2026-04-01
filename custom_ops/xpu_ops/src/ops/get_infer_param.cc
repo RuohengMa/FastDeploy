@@ -62,6 +62,42 @@ void lod_to_slot_mapping(api::Context* xpu_ctx,
   PD_CHECK(ret == api::SUCCESS, "api::do_host2device failed.");
 }
 
+void lod_to_slot_mapping_decode(api::Context* xpu_ctx,
+                                paddle::Place place,
+                                const std::vector<int32_t>& block_table,
+                                const std::vector<int32_t>& kv_seq_lod,
+                                const std::vector<int32_t>& start_tokens,
+                                const std::vector<int32_t>& real_batch,
+                                int32_t* slot_mapping,
+                                int32_t dec_batch,
+                                int32_t block_size,
+                                int32_t batch_size,
+                                int32_t max_num_blocks_per_seq) {
+  std::vector<int32_t> slot_mapping_vec(batch_size, -1);
+  int32_t idx = 0;
+  // For each Batch
+  for (auto batch_ = 0; batch_ < batch_size; batch_++) {
+    int32_t seq_len = kv_seq_lod[batch_ + 1] - kv_seq_lod[batch_];
+    int32_t seq_start = start_tokens[batch_];
+    int32_t dst_batch_id = real_batch[batch_];
+    // for each token
+    for (auto seq_ = seq_start; seq_ < seq_start + seq_len; seq_++) {
+      int32_t table_id = seq_ / block_size;
+      int32_t block_id =
+          block_table[dst_batch_id * max_num_blocks_per_seq + table_id];
+      int32_t seq_offset = seq_ % block_size;
+      int32_t dst_token_offset = block_id * block_size + seq_offset;
+      slot_mapping_vec[idx] = dst_token_offset;
+      idx++;
+    }
+  }
+  int ret = api::do_host2device(xpu_ctx,
+                                slot_mapping_vec.data(),
+                                slot_mapping,
+                                batch_size * sizeof(int32_t));
+  PD_CHECK(ret == api::SUCCESS, "api::do_host2device failed.");
+}
+
 std::vector<paddle::Tensor> GetInferParam(
     const paddle::Tensor& seq_lens_encoder,
     const paddle::Tensor& seq_lens_decoder,
@@ -211,12 +247,13 @@ std::vector<paddle::Tensor> GetInferParam(
                     seq_lens_encoder.type(),
                     seq_lens_encoder.place());
 
-  paddle::Tensor slot_mapping_enc = paddle::zeros(
-      {total_enc_len}, paddle::DataType::INT32, seq_lens_encoder.place());
-  // slot_mapping_dec is only used in mtp mode
+  paddle::Tensor slot_mapping_enc = paddle::full(
+      {total_enc_len}, -1, paddle::DataType::INT32, seq_lens_encoder.place());
   // TODO: mtp mode not verified yet
   paddle::Tensor slot_mapping_dec =
       paddle::zeros({bsz}, paddle::DataType::INT32, seq_lens_decoder.place());
+  paddle::Tensor test_tensor =
+      paddle::empty({bsz}, paddle::DataType::INT32, seq_lens_encoder.place());
   if (FLAGS_encoder_splice || FLAGS_decoder_splice) {
     std::vector<int32_t> block_tables_vec(block_bs * block_num_per_seq);
     r = xpu_memcpy(block_tables_vec.data(),
@@ -236,18 +273,18 @@ std::vector<paddle::Tensor> GetInferParam(
                           enc_batch,
                           block_num_per_seq);
     }
-    if (FLAGS_decoder_splice) {
-      lod_to_slot_mapping(xpu_ctx->x_context(),
-                          seq_lens_decoder.place(),
-                          block_tables_vec,
-                          decoder_seq_lod_vec,
-                          decoder_context_len_cache_vec,
-                          decoder_batch_map_vec,
-                          slot_mapping_dec.data<int32_t>(),
-                          bsz,
-                          block_size,
-                          bsz,
-                          block_num_per_seq);
+    if (FLAGS_decoder_splice && dec_batch > 0) {
+      //   lod_to_slot_mapping_decode(xpu_ctx->x_context(),
+      //                       seq_lens_decoder.place(),
+      //                       block_tables_vec,
+      //                       decoder_seq_lod_vec,
+      //                       decoder_context_len_cache_vec,
+      //                       decoder_batch_map_vec,
+      //                       slot_mapping_dec.data<int32_t>(),
+      //                       dec_batch,
+      //                       block_size,
+      //                       bsz,
+      //                       block_num_per_seq);
     }
   }
   // for non mtp decode
@@ -432,10 +469,11 @@ std::vector<paddle::Tensor> GetInferParam(
           decoder_context_len_cpu,
           decoder_context_len_cache_cpu,
           len_info_cpu,
-          slot_mapping_enc,
           slot_mapping_dec,
           non_mtp_decoder_seq_lod_cpu,
-          non_mtp_decoder_seq_lod};
+          non_mtp_decoder_seq_lod,
+          test_tensor,
+          slot_mapping_enc};
 }
 
 std::vector<std::vector<int64_t>> GetInferParamInferShape(
@@ -464,7 +502,12 @@ std::vector<std::vector<int64_t>> GetInferParamInferShape(
           seq_lens_encoder_shape,
           seq_lens_encoder_shape,
           seq_lens_encoder_shape,
-          {7}};
+          {7},
+          {seq_lens_encoder_shape[0]},
+          {seq_lens_encoder_shape[0] + 1},
+          {seq_lens_encoder_shape[0] + 1},
+          {seq_lens_encoder_shape[0]},
+          {seq_lens_encoder_shape[0]}};
 }
 
 std::vector<paddle::DataType> GetInferParamInferDtype(
@@ -480,7 +523,8 @@ std::vector<paddle::DataType> GetInferParamInferDtype(
       seq_lens_encoder_dtype, seq_lens_encoder_dtype, seq_lens_encoder_dtype,
       seq_lens_encoder_dtype, seq_lens_encoder_dtype, seq_lens_encoder_dtype,
       seq_lens_encoder_dtype, seq_lens_encoder_dtype, seq_lens_encoder_dtype,
-      seq_lens_encoder_dtype};
+      seq_lens_encoder_dtype, block_tables_dtype,     block_tables_dtype,
+      block_tables_dtype,     block_tables_dtype,     block_tables_dtype};
 }
 
 PD_BUILD_OP(get_infer_param)
@@ -510,10 +554,11 @@ PD_BUILD_OP(get_infer_param)
               "decoder_context_len_cpu",
               "decoder_context_len_cache_cpu",
               "len_info_cpu",
-              "slot_mapping_enc",
               "slot_mapping_dec",
               "non_mtp_decoder_seq_lod_cpu",
-              "on_mtp_decoder_seq_lod"})
+              "on_mtp_decoder_seq_lod",
+              "test_tensor",
+              "slot_mapping_enc"})
     .SetKernelFn(PD_KERNEL(GetInferParam))
     .Attrs({"block_size: int"})
     .SetInferShapeFn(PD_INFER_SHAPE(GetInferParamInferShape))

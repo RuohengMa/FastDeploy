@@ -192,8 +192,8 @@ class XPUAttentionBackend(AttentionBackend):
             k_norm_weight = None
         # draft model not use rope3d now
         use_rope3d = self.rope_3d and not forward_meta.is_draft
+        # res = block_attn_fused(
         res = block_attn(
-            # res = block_attn_fused(
             qkv,
             forward_meta.caches[2 * layer.layer_id],
             forward_meta.caches[2 * layer.layer_id + 1],
@@ -222,6 +222,7 @@ class XPUAttentionBackend(AttentionBackend):
             forward_meta.slot_mapping_dec,
             forward_meta.non_mtp_decoder_seq_lod_cpu,
             forward_meta.non_mtp_decoder_seq_lod,
+            forward_meta.test_tensor,
             cache_k_scale,
             cache_v_scale,
             cache_k_out_scale,

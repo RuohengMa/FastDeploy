@@ -64,156 +64,6 @@ void lod_to_slot_mapping_nonmtp_decode(
     paddle::Place place,
     const TID* block_table,
     TID* slot_mapping,
-    const api::VectorParam<int32_t>& kv_seq_lod,
-    const api::VectorParam<int32_t>& start_tokens,
-    const api::VectorParam<int32_t>& real_batch,
-    int32_t block_size,
-    int32_t batch_size,
-    int32_t max_num_blocks_per_seq,
-    int64_t block_table_numel) {
-  paddle::Tensor block_size_tensor =
-      paddle::full({1}, block_size, paddle::DataType::INT32, place);
-  paddle::Tensor max_num_blocks_per_seq_tensor =
-      paddle::full({1}, max_num_blocks_per_seq, paddle::DataType::INT32, place);
-  paddle::Tensor table_id_tensor =
-      paddle::empty({batch_size}, paddle::DataType::INT32, place);
-  paddle::Tensor seq_offset_tensor =
-      paddle::empty({batch_size}, paddle::DataType::INT32, place);
-  paddle::Tensor block_table_index_tensor =
-      paddle::empty({batch_size}, paddle::DataType::INT32, place);
-  paddle::Tensor block_id_tensor =
-      paddle::empty({batch_size}, paddle::DataType::INT32, place);
-  auto block_size_tensor_ptr = block_size_tensor.data<int32_t>();
-  auto max_num_blocks_per_seq_tensor_ptr =
-      max_num_blocks_per_seq_tensor.data<int32_t>();
-  auto table_id_tensor_ptr =
-      const_cast<int32_t*>(table_id_tensor.data<int32_t>());
-  auto seq_offset_tensor_ptr =
-      const_cast<int32_t*>(seq_offset_tensor.data<int32_t>());
-  auto block_table_index_tensor_ptr =
-      const_cast<int32_t*>(block_table_index_tensor.data<int32_t>());
-  auto block_id_tensor_ptr =
-      const_cast<int32_t*>(block_id_tensor.data<int32_t>());
-
-  int ret = api::broadcast_div<TID>(xpu_ctx,
-                                    start_tokens.xpu,
-                                    block_size_tensor_ptr,
-                                    table_id_tensor_ptr,
-                                    {batch_size},
-                                    {1});
-  PD_CHECK(ret == api::SUCCESS, "api::broadcast_div failed.");
-
-  ret = api::broadcast_mod<TID>(xpu_ctx,
-                                start_tokens.xpu,
-                                block_size_tensor_ptr,
-                                seq_offset_tensor_ptr,
-                                {batch_size},
-                                {1});
-  PD_CHECK(ret == api::SUCCESS, "api::broadcast_mod failed.");
-
-  ret = api::broadcast_mul<TID>(xpu_ctx,
-                                real_batch.xpu,
-                                max_num_blocks_per_seq_tensor_ptr,
-                                block_table_index_tensor_ptr,
-                                {batch_size},
-                                {1});
-  PD_CHECK(ret == api::SUCCESS, "api::broadcast_mul failed.");
-  ret = api::broadcast_add<TID>(xpu_ctx,
-                                block_table_index_tensor_ptr,
-                                table_id_tensor_ptr,
-                                block_table_index_tensor_ptr,
-                                {batch_size},
-                                {batch_size});
-  PD_CHECK(ret == api::SUCCESS, "api::broadcast_mul failed.");
-
-  ret = api::index_select<TID, TID>(xpu_ctx,
-                                    block_table,
-                                    block_table_index_tensor_ptr,
-                                    block_id_tensor_ptr,
-                                    {block_table_numel},
-                                    batch_size,
-                                    0);
-  PD_CHECK(ret == api::SUCCESS, "api::index_select failed.");
-
-  ret = api::broadcast_mul<TID>(xpu_ctx,
-                                block_id_tensor_ptr,
-                                block_size_tensor_ptr,
-                                block_id_tensor_ptr,
-                                {batch_size},
-                                {1});
-  PD_CHECK(ret == api::SUCCESS, "api::broadcast_mul failed.");
-  ret = api::broadcast_add<TID>(xpu_ctx,
-                                block_id_tensor_ptr,
-                                seq_offset_tensor_ptr,
-                                slot_mapping,
-                                {batch_size},
-                                {batch_size});
-  PD_CHECK(ret == api::SUCCESS, "api::broadcast_add failed.");
-
-  // copy并对首batch加1
-  paddle::Tensor one = paddle::ones({1}, paddle::DataType::INT32, place);
-  paddle::Tensor real_batch_copy =
-      paddle::empty({batch_size}, paddle::DataType::INT32, place);
-  auto real_batch_copy_ptr =
-      const_cast<int32_t*>(real_batch_copy.data<int32_t>());
-  ret =
-      api::copy<TID>(xpu_ctx, real_batch.xpu, real_batch_copy_ptr, batch_size);
-  PD_CHECK(ret == api::SUCCESS, "api::copy failed.");
-  ret = api::broadcast_add<TID>(xpu_ctx,
-                                real_batch_copy_ptr,
-                                one.data<int32_t>(),
-                                real_batch_copy_ptr,
-                                {1},
-                                {1});
-  PD_CHECK(ret == api::SUCCESS, "api::broadcast_add failed.");
-
-  // 计算mask
-  paddle::Tensor zero =
-      paddle::zeros({batch_size}, paddle::DataType::INT32, place);
-  paddle::Tensor mask =
-      paddle::empty({batch_size}, paddle::DataType::BOOL, place);
-  ret = api::equal<TID>(xpu_ctx,
-                        real_batch_copy_ptr,
-                        zero.data<int32_t>(),
-                        const_cast<bool*>(mask.data<bool>()),
-                        batch_size);
-  PD_CHECK(ret == api::SUCCESS, "api::equal failed.");
-
-  // 准备冗余index
-  paddle::Tensor unused_index =
-      paddle::empty({1}, paddle::DataType::INT32, place);
-  auto unused_index_ptr = const_cast<int32_t*>(unused_index.data<int32_t>());
-  ret = api::broadcast_add<TID>(
-      xpu_ctx, slot_mapping, block_size_tensor_ptr, unused_index_ptr, {1}, {1});
-  PD_CHECK(ret == api::SUCCESS, "api::broadcast_add failed.");
-
-  // broadcast和where操作
-  paddle::Tensor unused_index_broadcasted =
-      paddle::empty({batch_size}, paddle::DataType::INT32, place);
-  auto unused_index_broadcasted_ptr =
-      const_cast<int32_t*>(unused_index_broadcasted.data<int32_t>());
-  ret = api::broadcast<TID>(xpu_ctx,
-                            unused_index_ptr,
-                            unused_index_broadcasted_ptr,
-                            {1},
-                            {batch_size});
-  PD_CHECK(ret == api::SUCCESS, "api::broadcast failed.");
-  ret = api::where<TID>(xpu_ctx,
-                        mask.data<bool>(),
-                        unused_index_broadcasted_ptr,
-                        slot_mapping,
-                        slot_mapping,
-                        {batch_size},
-                        {batch_size});
-  PD_CHECK(ret == api::SUCCESS, "api::where failed.");
-}
-
-template <typename TID>
-void lod_to_slot_mapping_nonmtp_decode_debug(
-    api::Context* xpu_ctx,
-    paddle::Place place,
-    const TID* block_table,
-    TID* slot_mapping,
     const api::VectorParam<int32_t>& kv_seq_lod,  // unused
     const api::VectorParam<int32_t>& start_tokens,
     const api::VectorParam<int32_t>& real_batch,
@@ -721,6 +571,7 @@ void split_rope_kvcache_splice_decoder(
     const paddle::Tensor& key_cache,
     const paddle::Tensor& value_cache,
     const paddle::Tensor& block_tables,
+    const paddle::Tensor& slot_mapping_dec,
     int64_t token_num,
     int64_t q_num_heads,
     int64_t kv_num_heads,
@@ -879,8 +730,7 @@ void split_rope_kvcache_splice_decoder(
   // write to cache
   auto slot_mapping =
       paddle::empty({token_num}, block_tables.dtype(), block_tables.place());
-  // lod_to_slot_mapping_nonmtp_decode<TID>(
-  lod_to_slot_mapping_nonmtp_decode_debug<TID>(
+  lod_to_slot_mapping_nonmtp_decode<TID>(
       xpu_ctx,
       place,
       block_tables.data<TID>(),
@@ -892,6 +742,14 @@ void split_rope_kvcache_splice_decoder(
       batch_size,
       max_num_blocks_per_seq,
       block_tables.numel());
+
+  // ret = api::copy<TID>(xpu_ctx,
+  //                       const_cast<TID*>(slot_mapping.data<TID>()),
+  //                       const_cast<TID*>(slot_mapping_dec.data<TID>()),
+  //                       token_num);
+
+  auto slot_mapping_ptr = const_cast<TID*>(slot_mapping.data<TID>());
+  // auto slot_mapping_ptr = const_cast<TID*>(slot_mapping_dec.data<TID>());
 
   float* k_cache_scale_fp32_ptr = nullptr;
   float* v_cache_scale_fp32_ptr = nullptr;
@@ -940,7 +798,7 @@ void split_rope_kvcache_splice_decoder(
             reinterpret_cast<const TKV_CACHE*>(key_cache.data())),
         const_cast<TKV_CACHE*>(
             reinterpret_cast<const TKV_CACHE*>(value_cache.data())),
-        const_cast<TID*>(slot_mapping.data<TID>()),
+        slot_mapping_ptr,
         num_blocks,
         token_num,
         real_kv_num_heads,
@@ -960,7 +818,7 @@ void split_rope_kvcache_splice_decoder(
             reinterpret_cast<const TKV_CACHE*>(key_cache.data())),
         const_cast<TKV_CACHE*>(
             reinterpret_cast<const TKV_CACHE*>(value_cache.data())),
-        const_cast<TID*>(slot_mapping.data<TID>()),
+        slot_mapping_ptr,
         num_blocks,
         token_num,
         real_kv_num_heads,
@@ -1518,6 +1376,7 @@ std::vector<paddle::Tensor> SplitEmbeddingKVCache(
             key_cache,
             value_cache,
             block_tables,
+            slot_mapping_dec,
             dec_batch,  // normal decode, generate one token for each batch
             num_heads,
             kv_num_heads,
@@ -2176,6 +2035,7 @@ std::vector<paddle::Tensor> SplitEmbeddingKVCacheBlockAttn(
     const paddle::Tensor& slot_mapping_dec,
     const paddle::Tensor& non_mtp_decoder_seq_lod_cpu,
     const paddle::Tensor& non_mtp_decoder_seq_lod,
+    const paddle::Tensor& test_tensor,
     const paddle::optional<paddle::Tensor>& k_scales,
     const paddle::optional<paddle::Tensor>& v_scales,
     const paddle::optional<paddle::Tensor>& k_scales_inv,
@@ -2342,6 +2202,7 @@ PD_BUILD_STATIC_OP(block_attn)
              "slot_mapping_dec",
              "non_mtp_decoder_seq_lod_cpu",
              "non_mtp_decoder_seq_lod",
+             "test_tensor",
              paddle::Optional("k_scales"),
              paddle::Optional("v_scales"),
              paddle::Optional("k_scales_inv"),

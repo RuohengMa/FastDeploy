@@ -61,7 +61,15 @@ def support_graph_optimization(cls: Optional[_T] = None) -> _T:
             return
 
     def __call__(self, **kwargs):
-        """Decorator model.__call__() func"""
+        """
+        装饰模型的__call__方法，根据是否启用图优化选择执行路径
+
+        Args:
+            **kwargs: 传递给模型的关键字参数
+
+        Returns:
+            根据use_graph_opt标志返回forward或graph_opt_backend的执行结果
+        """
         if not self.use_graph_opt:
             return self.forward(**kwargs)
 

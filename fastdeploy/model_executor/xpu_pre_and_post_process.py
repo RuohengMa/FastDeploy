@@ -196,10 +196,11 @@ def xpu_pre_process(
         xpu_forward_meta.decoder_context_len_cpu,
         xpu_forward_meta.decoder_context_len_cache_cpu,
         xpu_forward_meta.len_info_cpu,
-        xpu_forward_meta.slot_mapping_enc,
         xpu_forward_meta.slot_mapping_dec,
         xpu_forward_meta.non_mtp_decoder_seq_lod_cpu,
         xpu_forward_meta.non_mtp_decoder_seq_lod,
+        xpu_forward_meta.test_tensor,
+        xpu_forward_meta.slot_mapping_enc,
     ) = get_infer_param(
         seq_lens_encoder, seq_lens_decoder, seq_lens_this_time, xpu_forward_meta.block_tables, block_size
     )
@@ -233,8 +234,11 @@ def xpu_pre_process(
         if forward_meta is None:
             return xpu_forward_meta
         else:
-            forward_meta.slot_mapping_enc = None
-            forward_meta.slot_mapping_dec = None
+            forward_meta.slot_mapping_enc = xpu_forward_meta.slot_mapping_enc
+            forward_meta.slot_mapping_dec = xpu_forward_meta.slot_mapping_dec
+            forward_meta.non_mtp_decoder_seq_lod_cpu = xpu_forward_meta.non_mtp_decoder_seq_lod_cpu
+            forward_meta.non_mtp_decoder_seq_lod = xpu_forward_meta.non_mtp_decoder_seq_lod
+            forward_meta.test_tensor = xpu_forward_meta.test_tensor
             forward_meta.copy_from(xpu_forward_meta)
             return forward_meta
     else:

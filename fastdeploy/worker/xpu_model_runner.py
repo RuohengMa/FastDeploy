@@ -1574,10 +1574,22 @@ class XPUModelRunner(ModelRunnerBase):
             if self.enable_mm:
                 model_inputs["image_features"] = self.share_inputs["image_features"]
             # 3. Execute model
+            # mark debug
+            logger.info(f"mark debug: before running encoder_seq_lod: {self.forward_meta.encoder_seq_lod}")
+            logger.info(f"mark debug: before running decoder_seq_lod: {self.forward_meta.decoder_seq_lod}")
+            logger.info(f"mark debug: before running slot_mapping_enc: {self.forward_meta.slot_mapping_enc}")
+            logger.info(f"mark debug: before running slot_mapping_dec: {self.forward_meta.slot_mapping_dec}")
+            logger.info(f"mark debug: before running test_tensor: {self.forward_meta.test_tensor}")
             model_output = self.model(
                 model_inputs,
                 forward_meta=self.forward_meta,
             )
+            # mark debug
+            logger.info(f"mark debug: after running encoder_seq_lod: {self.forward_meta.encoder_seq_lod}")
+            logger.info(f"mark debug: after running decoder_seq_lod: {self.forward_meta.decoder_seq_lod}")
+            logger.info(f"mark debug: before running slot_mapping_enc: {self.forward_meta.slot_mapping_enc}")
+            logger.info(f"mark debug: after running slot_mapping_dec: {self.forward_meta.slot_mapping_dec}")
+            logger.info(f"mark debug: after running test_tensor: {self.forward_meta.test_tensor}")
             if self.use_cudagraph:
                 model_output = model_output[: self.real_token_num]
 

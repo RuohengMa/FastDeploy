@@ -276,6 +276,7 @@ class XPUForwardMeta(ForwardMeta):
     slot_mapping_dec: Optional[paddle.Tensor] = None
     non_mtp_decoder_seq_lod_cpu: Optional[paddle.Tensor] = None
     non_mtp_decoder_seq_lod: Optional[paddle.Tensor] = None
+    test_tensor: Optional[paddle.Tensor] = None
 
     def copy_from(self, other: "XPUForwardMeta", skip_keys: Optional[list] = None):
         """
