@@ -196,8 +196,8 @@ def xpu_pre_process(
         # "decoder_batch_map",
         "encoder_batch_idx",
         "decoder_batch_idx",
-        # "encoder_seq_lod",
-        # "decoder_seq_lod",
+        "encoder_seq_lod",
+        "decoder_seq_lod",
         # "encoder_kv_lod",
         # "prefix_len",
         # "decoder_context_len",
@@ -209,8 +209,8 @@ def xpu_pre_process(
         # decoder_batch_map = forward_meta.decoder_batch_map
         encoder_batch_idx = forward_meta.encoder_batch_idx
         decoder_batch_idx = forward_meta.decoder_batch_idx
-        # encoder_seq_lod = forward_meta.encoder_seq_lod
-        # decoder_seq_lod = forward_meta.decoder_seq_lod
+        encoder_seq_lod = forward_meta.encoder_seq_lod
+        decoder_seq_lod = forward_meta.decoder_seq_lod
         # encoder_kv_lod = forward_meta.encoder_kv_lod
         # prefix_len = forward_meta.prefix_len
         # decoder_context_len = forward_meta.decoder_context_len
@@ -222,8 +222,8 @@ def xpu_pre_process(
         # decoder_batch_map = xpu_forward_meta.decoder_batch_map
         encoder_batch_idx = xpu_forward_meta.encoder_batch_idx
         decoder_batch_idx = xpu_forward_meta.decoder_batch_idx
-        # encoder_seq_lod = xpu_forward_meta.encoder_seq_lod
-        # decoder_seq_lod = xpu_forward_meta.decoder_seq_lod
+        encoder_seq_lod = xpu_forward_meta.encoder_seq_lod
+        decoder_seq_lod = xpu_forward_meta.decoder_seq_lod
         # encoder_kv_lod = xpu_forward_meta.encoder_kv_lod
         # prefix_len = xpu_forward_meta.prefix_len
         # decoder_context_len = xpu_forward_meta.decoder_context_len
@@ -240,10 +240,10 @@ def xpu_pre_process(
         # xpu_forward_meta.decoder_batch_idx,
         _,
         _,
-        xpu_forward_meta.encoder_seq_lod,
-        xpu_forward_meta.decoder_seq_lod,
-        # _,
-        # _,
+        # xpu_forward_meta.encoder_seq_lod,
+        # xpu_forward_meta.decoder_seq_lod,
+        _,
+        _,
         xpu_forward_meta.encoder_kv_lod,
         xpu_forward_meta.prefix_len,
         xpu_forward_meta.decoder_context_len,
@@ -271,8 +271,8 @@ def xpu_pre_process(
         # decoder_batch_map,
         encoder_batch_idx,
         decoder_batch_idx,
-        # encoder_seq_lod,
-        # decoder_seq_lod,
+        encoder_seq_lod,
+        decoder_seq_lod,
         # encoder_kv_lod,
         # prefix_len,
         # decoder_context_len,
@@ -297,10 +297,10 @@ def xpu_pre_process(
 
     adjusted_input = adjust_batch(
         ids_remove_padding.reshape([-1, 1]),
-        xpu_forward_meta.encoder_seq_lod,
-        xpu_forward_meta.decoder_seq_lod,
-        # encoder_seq_lod,
-        # decoder_seq_lod,
+        # xpu_forward_meta.encoder_seq_lod,
+        # xpu_forward_meta.decoder_seq_lod,
+        encoder_seq_lod,
+        decoder_seq_lod,
         # xpu_forward_meta.encoder_batch_idx,
         # xpu_forward_meta.decoder_batch_idx,
         encoder_batch_idx,
