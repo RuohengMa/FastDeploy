@@ -152,7 +152,7 @@ def xpu_pre_process(
         caches=share_inputs["caches"],
         max_num_seqs=share_inputs["seq_lens_this_time"].shape[0],
     )
-    xpu_forward_meta.init_tensor(seq_lens_encoder.shape[0])
+    xpu_forward_meta.init_tensor(seq_lens_encoder.shape[0], share_inputs["block_tables"].shape)
 
     skip_list = [
         "encoder_batch_map",
@@ -165,6 +165,7 @@ def xpu_pre_process(
         "prefix_len",
         "decoder_context_len",
         "decoder_context_len_cache",
+        "prefix_block_tables",
         "encoder_batch_map_cpu",
         "decoder_batch_map_cpu",
         "encoder_batch_idx_cpu",
@@ -190,6 +191,8 @@ def xpu_pre_process(
         decoder_context_len = forward_meta.decoder_context_len
         decoder_context_len_cache = forward_meta.decoder_context_len_cache
 
+        prefix_block_tables = forward_meta.prefix_block_tables
+
         encoder_batch_map_cpu = forward_meta.encoder_batch_map_cpu
         decoder_batch_map_cpu = forward_meta.decoder_batch_map_cpu
         encoder_batch_idx_cpu = forward_meta.encoder_batch_idx_cpu
@@ -213,6 +216,8 @@ def xpu_pre_process(
         prefix_len = xpu_forward_meta.prefix_len
         decoder_context_len = xpu_forward_meta.decoder_context_len
         decoder_context_len_cache = xpu_forward_meta.decoder_context_len_cache
+
+        prefix_block_tables = xpu_forward_meta.prefix_block_tables
 
         encoder_batch_map_cpu = xpu_forward_meta.encoder_batch_map_cpu
         decoder_batch_map_cpu = xpu_forward_meta.decoder_batch_map_cpu
@@ -238,7 +243,7 @@ def xpu_pre_process(
         _,
         _,
         _,
-        xpu_forward_meta.prefix_block_tables,
+        _,
         _,
         _,
         _,
@@ -267,6 +272,7 @@ def xpu_pre_process(
         prefix_len,
         decoder_context_len,
         decoder_context_len_cache,
+        prefix_block_tables,
         encoder_batch_map_cpu,
         decoder_batch_map_cpu,
         encoder_batch_idx_cpu,
